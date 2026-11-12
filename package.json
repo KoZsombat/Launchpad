@@ -1,0 +1,16 @@
+{
+  "name": "launchpad",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "corepack pnpm --parallel --filter @launchpad/server --filter @launchpad/web dev",
+    "build": "corepack pnpm --filter @launchpad/server build && corepack pnpm --filter @launchpad/web build",
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "db:generate": "corepack pnpm --filter @launchpad/server db:generate"
+  }
+}

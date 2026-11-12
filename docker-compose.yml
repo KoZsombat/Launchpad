@@ -1,0 +1,70 @@
+name: launchpad
+
+networks:
+  web:
+    external: true
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    networks:
+      - web
+
+  traefik:
+    image: traefik:v3
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=web
+      - --entrypoints.web.address=:80
+      - --accesslog=true
+      - --log.level=INFO
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - web
+
+  launchpad:
+    build:
+      context: .
+    image: launchpad:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_PATH: /data/launchpad.db
+      DATA_DIR: /data
+      WEB_DIST: /app/public
+    volumes:
+      # The panel creates and removes containers, so it needs write access to the socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+    extra_hosts:
+      # Allows the web SSH terminal to reach the VM's sshd from inside the container.
+      - host.docker.internal:host-gateway
+    networks:
+      - web
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: web
+      traefik.http.routers.launchpad.rule: Host(`panel.${BASE_DOMAIN}`)
+      traefik.http.routers.launchpad.entrypoints: web
+      traefik.http.routers.launchpad.service: launchpad
+      traefik.http.services.launchpad.loadbalancer.server.port: "3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
