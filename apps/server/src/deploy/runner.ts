@@ -25,6 +25,7 @@ import {
   setDeploymentStreamStatus,
 } from "./logs";
 import { buildImageFromRepo } from "./source";
+import { deployComposeProject } from "./compose-runner";
 
 export interface DeploymentOptions {
   imageTag?: string | null;
@@ -106,6 +107,11 @@ export async function runDeployment(
     transition("building");
     log(`Starting deployment ${deploymentId.slice(0, 8)} (${options.imageTag ? "CI image" : app.sourceType}).`);
 
+    if (app.sourceType === "compose") {
+      await deployComposeProject({ app, deploymentId, log, transition });
+      return;
+    }
+
     const resolved = await resolveImage(app, deploymentId, options, log);
     setDeploymentImage(deploymentId, {
       imageTag: resolved.imageTag,
@@ -123,7 +129,7 @@ export async function runDeployment(
       ...buildTraefikLabels({
         appId,
         subdomain: appWithUpdatedConfig.subdomain,
-        baseDomain: getBaseDomain(),
+        baseDomain: appWithUpdatedConfig.domain ?? getBaseDomain(),
         port: appWithUpdatedConfig.internalPort,
         healthPath: appWithUpdatedConfig.healthPath,
         network: config.dockerNetwork,
@@ -205,10 +211,14 @@ export async function runDeployment(
 
     const app = getAppRow(appId);
     if (app) {
-      const oldContainerStillRunning = app.containerId
-        ? await containerIsRunning(app.containerId).catch(() => false)
-        : false;
-      if (!oldContainerStillRunning) setAppStatus(appId, "failed");
+      if (app.sourceType === "compose") {
+        if (!app.composeProject) setAppStatus(appId, "failed");
+      } else {
+        const oldContainerStillRunning = app.containerId
+          ? await containerIsRunning(app.containerId).catch(() => false)
+          : false;
+        if (!oldContainerStillRunning) setAppStatus(appId, "failed");
+      }
     }
   } finally {
     finishDeploymentLog(deploymentId);

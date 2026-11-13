@@ -60,3 +60,21 @@ describe("buildTraefikLabels", () => {
     expect(first).toEqual(second);
   });
 });
+
+describe("buildTraefikLabels multiple subdomains", () => {
+  it("ORs every hostname into one rule and deduplicates", () => {
+    const labels = buildTraefikLabels({
+      appId: "app-id",
+      subdomains: ["app", "www-app", "app"],
+      baseDomain: "example.com",
+      port: 8080,
+      serviceName: "web.api",
+    });
+    expect(labels["traefik.http.routers.lp-app-id-web-api.rule"]).toBe(
+      "Host(`app.example.com`) || Host(`www-app.example.com`)",
+    );
+    expect(labels["traefik.http.services.lp-app-id-web-api.loadbalancer.server.port"]).toBe(
+      "8080",
+    );
+  });
+});

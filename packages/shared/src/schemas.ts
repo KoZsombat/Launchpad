@@ -2,9 +2,13 @@ import { z } from "zod";
 import { ENV_KEY_REGEX, VOLUME_NAME_REGEX } from "./subdomain";
 import { validateSlug, validateSubdomain } from "./subdomain";
 
-export const SOURCE_TYPES = ["image", "github"] as const;
+export const SOURCE_TYPES = ["image", "github", "compose"] as const;
 export const sourceTypeSchema = z.enum(SOURCE_TYPES);
 export type SourceType = (typeof SOURCE_TYPES)[number];
+
+export const DEPLOY_TARGETS = ["local", "remote"] as const;
+export const deployTargetSchema = z.enum(DEPLOY_TARGETS);
+export type DeployTarget = (typeof DEPLOY_TARGETS)[number];
 
 const optionalText = (max: number) => z.string().trim().max(max).optional();
 
@@ -97,6 +101,46 @@ export const slugSchema = z
     if (!result.ok) ctx.addIssue({ code: "custom", message: result.reason });
   });
 
+const HOSTNAME_REGEX =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Per-project domain. `localhost` enables local testing hostnames. */
+export const domainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .refine(
+    (value) => value === "localhost" || HOSTNAME_REGEX.test(value),
+    "Use a valid domain, e.g. example.com, or localhost for tests.",
+  );
+
+const portSchema = z
+  .number()
+  .int("Port must be a whole number.")
+  .min(1, "Port must be between 1 and 65535.")
+  .max(65_535, "Port must be between 1 and 65535.");
+
+/** One compose service that Launchpad knows how to deploy and optionally route. */
+export const composeServiceSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Service name is required.")
+    .max(100, "Service name is too long.")
+    .regex(
+      /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
+      "Use a valid compose service name (letters, numbers, dots, underscores or hyphens).",
+    ),
+  expose: z.boolean().default(true),
+  subdomains: z.array(subdomainSchema).max(20, "At most 20 subdomains per service.").default([]),
+  internalPort: portSchema,
+  healthPath: healthPathSchema,
+  envVars: z.array(envVarSchema).max(100).default([]),
+});
+
+export type ComposeServiceInput = z.infer<typeof composeServiceSchema>;
+
 const appConfigObject = z.object({
   sourceType: sourceTypeSchema,
   imageRef: optionalText(500),
@@ -107,15 +151,19 @@ const appConfigObject = z.object({
   dockerfilePath: optionalText(255),
   buildContext: optionalText(255),
   repoToken: z.string().max(4096).optional(),
-  internalPort: z
-    .number()
-    .int("Port must be a whole number.")
-    .min(1, "Port must be between 1 and 65535.")
-    .max(65_535, "Port must be between 1 and 65535."),
+  internalPort: portSchema.optional(),
   healthPath: healthPathSchema,
   envVars: z.array(envVarSchema).max(100).default([]),
   volumes: z.array(volumeSchema).max(20).default([]),
   cicdEnabled: z.boolean().default(false),
+  deployTarget: deployTargetSchema.default("local"),
+  /** Optional per-project domain; null uses the panel's global base domain. */
+  domain: domainSchema.nullable().optional(),
+  /** Last scanned compose file. Kept for inline projects and as a snapshot for repo projects. */
+  composeFile: z.string().max(1_000_000).optional(),
+  /** Path to the compose file inside the repository, for repo-sourced projects. */
+  composePath: optionalText(255),
+  composeServices: z.array(composeServiceSchema).max(50).default([]),
 });
 
 type AppConfig = z.infer<typeof appConfigObject>;
@@ -134,7 +182,7 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
         });
       }
     }
-  } else {
+  } else if (config.sourceType === "github") {
     if (!config.repoUrl) {
       ctx.addIssue({ code: "custom", path: ["repoUrl"], message: "Repository URL is required." });
     } else {
@@ -165,7 +213,7 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
         path: ["dockerfilePath"],
         message: "Dockerfile path is required.",
       });
-    } else {
+    } else if (config.dockerfilePath) {
       const parsed = repoPathSchema.safeParse(config.dockerfilePath);
       if (!parsed.success) {
         ctx.addIssue({
@@ -181,7 +229,7 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
         path: ["buildContext"],
         message: "Build context is required (use '.' for the repository root).",
       });
-    } else {
+    } else if (config.buildContext) {
       const parsed = repoPathSchema.safeParse(config.buildContext);
       if (!parsed.success) {
         ctx.addIssue({
@@ -190,6 +238,129 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
           message: parsed.error.issues[0]?.message ?? "Invalid build context.",
         });
       }
+    }
+  }
+
+  if (config.sourceType !== "compose" && config.internalPort === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["internalPort"],
+      message: "Internal port is required.",
+    });
+  }
+
+  if (config.sourceType === "compose") {
+    if (!config.composeFile && !config.repoUrl) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["composeFile"],
+        message: "Paste a compose file or provide a repository and compose path.",
+      });
+    }
+    if (config.repoUrl) {
+      const parsed = repoUrlSchema.safeParse(config.repoUrl);
+      if (!parsed.success) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["repoUrl"],
+          message: parsed.error.issues[0]?.message ?? "Invalid repository URL.",
+        });
+      }
+      if (!config.branch) {
+        ctx.addIssue({ code: "custom", path: ["branch"], message: "Branch is required for repositories." });
+      } else {
+        const branch = branchSchema.safeParse(config.branch);
+        if (!branch.success) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["branch"],
+            message: branch.error.issues[0]?.message ?? "Invalid branch name.",
+          });
+        }
+      }
+    }
+    if (config.composePath !== undefined) {
+      const parsed = repoPathSchema.safeParse(config.composePath);
+      if (!parsed.success) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["composePath"],
+          message: parsed.error.issues[0]?.message ?? "Invalid compose path.",
+        });
+      }
+    }
+    if (config.composeServices.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["composeServices"],
+        message: "Scan the compose file and configure at least one service.",
+      });
+    }
+    const serviceNames = new Set<string>();
+    const subdomainOwner = new Map<string, string>();
+    let exposedCount = 0;
+    config.composeServices.forEach((service, index) => {
+      if (serviceNames.has(service.name)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["composeServices", index, "name"],
+          message: "Duplicate service name.",
+        });
+      }
+      serviceNames.add(service.name);
+
+      if (service.expose) {
+        exposedCount += 1;
+        if (service.subdomains.length === 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["composeServices", index, "subdomains"],
+            message: "Add at least one subdomain for a published service.",
+          });
+        }
+
+        // Subdomains on unpublished services are kept for a later republish but are
+        // inert: they must not claim a hostname or collide with another route.
+        const seen = new Set<string>();
+        service.subdomains.forEach((subdomain, subIndex) => {
+          if (seen.has(subdomain)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["composeServices", index, "subdomains", subIndex],
+              message: "Duplicate subdomain on this service.",
+            });
+          }
+          seen.add(subdomain);
+          const owner = subdomainOwner.get(subdomain);
+          if (owner && owner !== service.name) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["composeServices", index, "subdomains", subIndex],
+              message: `Subdomain "${subdomain}" is already used by service "${owner}".`,
+            });
+          }
+          subdomainOwner.set(subdomain, service.name);
+        });
+      }
+
+      const envKeys = new Set<string>();
+      service.envVars.forEach((entry, envIndex) => {
+        if (envKeys.has(entry.key)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["composeServices", index, "envVars", envIndex, "key"],
+            message: "Duplicate environment variable key.",
+          });
+        }
+        envKeys.add(entry.key);
+      });
+    });
+    if (config.composeServices.length > 0 && exposedCount === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["composeServices"],
+        message: "Publish at least one service through Traefik.",
+      });
     }
   }
 
@@ -234,7 +405,33 @@ export const createAppSchema = appConfigObject
     name: slugSchema,
     subdomain: subdomainSchema,
   })
-  .superRefine(validateConfig);
+  .superRefine((config, ctx) => {
+    validateConfig(config, ctx);
+    if (config.sourceType !== "compose") return;
+    const exposed = config.composeServices
+      .filter((service) => service.expose)
+      .flatMap((service) => service.subdomains);
+    if (exposed.length > 0 && !exposed.includes(config.subdomain)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["subdomain"],
+        message: "Use one of the published service subdomains as the primary subdomain.",
+      });
+    }
+  });
+
+export const scanComposeSchema = z
+  .object({
+    compose: z.string().trim().min(1, "Paste a compose file.").max(1_000_000).optional(),
+    repoUrl: repoUrlSchema.optional(),
+    branch: branchSchema.optional(),
+    composePath: repoPathSchema.optional(),
+    repoToken: z.string().max(4096).optional(),
+  })
+  .refine((value) => Boolean(value.compose) || Boolean(value.repoUrl && value.branch), {
+    message: "Paste a compose file or provide a repository URL and branch.",
+    path: ["compose"],
+  });
 
 export const updateAppSchema = z
   .object({
@@ -244,6 +441,8 @@ export const updateAppSchema = z
     volumes: z.array(volumeSchema).max(20),
     cicdEnabled: z.boolean(),
     subdomain: subdomainSchema,
+    deployTarget: deployTargetSchema,
+    composeServices: z.array(composeServiceSchema).max(50),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, {
@@ -295,3 +494,4 @@ export type VolumeInput = z.infer<typeof volumeSchema>;
 export type CreateAppInput = z.infer<typeof createAppSchema>;
 export type UpdateAppInput = z.infer<typeof updateAppSchema>;
 export type DeployHookInput = z.infer<typeof deployHookSchema>;
+export type ScanComposeInput = z.infer<typeof scanComposeSchema>;

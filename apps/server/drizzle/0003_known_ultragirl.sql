@@ -1,0 +1,1 @@
+DROP INDEX `apps_subdomain_unique`;

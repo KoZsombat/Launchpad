@@ -51,4 +51,8 @@ describe("appUrl", () => {
   it("builds the public URL", () => {
     expect(appUrl("blog", "example.com")).toBe("https://blog.example.com");
   });
+
+  it("uses http for localhost test hosts", () => {
+    expect(appUrl("api", "localhost")).toBe("http://api.localhost");
+  });
 });

@@ -75,6 +75,22 @@ cicdRouter.get("/apps/:id/cicd", (req, res) => {
   res.json({ cicd: buildCicdInfo(app) });
 });
 
+cicdRouter.get("/apps/:id/github-push", (req, res) => {
+  const app = requireAppRow(requireParam(req.params, "id"));
+  if (!app.repoUrl) throw new ApiError(400, "This project has no GitHub repository.");
+  const repo = parseGitHubRepo(app.repoUrl);
+  res.json({
+    githubPush: {
+      appId: app.id,
+      branch: app.branch ?? "main",
+      webhookUrl: `${getPanelUrl()}/api/hooks/github/${app.id}`,
+      webhookSecret: getWebhookSecret(app),
+      repoOwner: repo?.owner ?? null,
+      repoName: repo?.repo ?? null,
+    },
+  });
+});
+
 cicdRouter.post("/apps/:id/cicd/workflow", async (req, res) => {
   const app = requireAppRow(requireParam(req.params, "id"));
   const { repo, workflowYaml } = githubContext(app);

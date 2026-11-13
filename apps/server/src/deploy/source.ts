@@ -58,7 +58,7 @@ export interface PreparedRepo {
   imageTag: string;
 }
 
-async function prepareRepo(app: AppRow, log: (line: string) => void): Promise<PreparedRepo> {
+export async function prepareRepo(app: AppRow, log: (line: string) => void): Promise<PreparedRepo> {
   if (!app.repoUrl || !app.branch) {
     throw new Error("This app is missing its GitHub repository configuration.");
   }
@@ -221,4 +221,86 @@ export async function buildImageFromRepo(
   await promise;
   log(`Built image ${prepared.imageTag} from commit ${prepared.sha}.`);
   return { imageTag: prepared.imageTag, commitSha: prepared.sha };
+}
+
+const COMPOSE_CANDIDATES = [
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "compose.yml",
+  "compose.yaml",
+];
+
+function findComposeFile(
+  root: string,
+  composePath: string | null,
+): { text: string; path: string } {
+  const candidates = composePath ? [composePath] : COMPOSE_CANDIDATES;
+  for (const candidate of candidates) {
+    const absolute = path.resolve(root, candidate);
+    const relative = path.relative(root, absolute);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("Compose path must be inside the repository.");
+    }
+    try {
+      if (fs.statSync(absolute).isFile()) {
+        return { text: fs.readFileSync(absolute, "utf8"), path: candidate };
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  throw new Error(
+    `Compose file "${composePath ?? COMPOSE_CANDIDATES[0]}" was not found in the repository.`,
+  );
+}
+
+/**
+ * Clones/fetches the app's repository and returns the compose file at
+ * `composePath` (or the first conventional compose filename at the root).
+ */
+export async function readRepoCompose(
+  app: AppRow,
+  log: (line: string) => void,
+): Promise<{ text: string; sha: string; path: string; projectDir: string }> {
+  const prepared = await prepareRepo(app, log);
+  const found = findComposeFile(prepared.repoDir, app.composePath);
+  return {
+    ...found,
+    sha: prepared.sha,
+    projectDir: path.dirname(path.join(prepared.repoDir, found.path)),
+  };
+}
+
+export interface RepoComposeRequest {
+  repoUrl: string;
+  branch: string;
+  token: string | null;
+  composePath: string | null;
+  log: (line: string) => void;
+}
+
+/** Clones a repository into a throwaway directory and reads one compose file. */
+export async function fetchComposeFromRepo(
+  request: RepoComposeRequest,
+): Promise<{ text: string; path: string }> {
+  await fsp.mkdir(config.reposDir, { recursive: true });
+  const dir = await fsp.mkdtemp(path.join(config.reposDir, "scan-"));
+  try {
+    await runGit(
+      [
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        request.branch,
+        "--single-branch",
+        authenticatedRepoUrl(request.repoUrl, request.token),
+        dir,
+      ],
+      { token: request.token, log: request.log },
+    );
+    return findComposeFile(dir, request.composePath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
 }

@@ -79,11 +79,20 @@ export interface StoredEnvVar {
   valueEnc: string;
 }
 
+export interface StoredComposeService {
+  name: string;
+  expose: boolean;
+  subdomains: string[];
+  internalPort: number;
+  healthPath: string;
+  envVars: StoredEnvVar[];
+}
+
 export const apps = sqliteTable("apps", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
-  subdomain: text("subdomain").notNull().unique(),
-  sourceType: text("source_type", { enum: ["image", "github"] }).notNull(),
+  subdomain: text("subdomain").notNull(),
+  sourceType: text("source_type", { enum: ["image", "github", "compose"] }).notNull(),
 
   imageRef: text("image_ref"),
   registryUsername: text("registry_username"),
@@ -94,6 +103,18 @@ export const apps = sqliteTable("apps", {
   dockerfilePath: text("dockerfile_path"),
   buildContext: text("build_context"),
   repoTokenEnc: text("repo_token_enc"),
+
+  composeFile: text("compose_file"),
+  composePath: text("compose_path"),
+  composeServices: text("compose_services", { mode: "json" })
+    .$type<StoredComposeService[]>()
+    .notNull()
+    .default([]),
+  composeProject: text("compose_project"),
+  deployTarget: text("deploy_target", { enum: ["local", "remote"] })
+    .notNull()
+    .default("local"),
+  domain: text("domain"),
 
   internalPort: integer("internal_port").notNull(),
   healthPath: text("health_path").notNull().default("/"),

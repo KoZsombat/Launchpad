@@ -50,5 +50,6 @@ export function isReservedSubdomain(value: string): boolean {
 }
 
 export function appUrl(subdomain: string, baseDomain: string): string {
-  return `https://${subdomain}.${baseDomain}`;
+  const scheme = baseDomain === "localhost" ? "http" : "https";
+  return `${scheme}://${subdomain}.${baseDomain}`;
 }

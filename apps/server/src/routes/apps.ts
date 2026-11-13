@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { createAppSchema, updateAppSchema } from "@launchpad/shared";
+import { createAppSchema, scanComposeSchema, updateAppSchema } from "@launchpad/shared";
 import { parseBody, requireParam } from "../lib/http";
 import {
   checkAvailability,
@@ -18,7 +18,7 @@ import {
   serializeDeployment,
   serializeDeploymentDetail,
 } from "../services/deployments";
-import { getBaseDomain } from "../services/settings";
+import { getBaseDomain, getGithubToken } from "../services/settings";
 import { enqueueDeployment } from "../deploy/runner";
 import {
   restartContainer,
@@ -28,6 +28,9 @@ import {
   removeContainer,
   removeAppVolume,
 } from "../docker/containers";
+import { scanCompose } from "../deploy/compose";
+import { fetchComposeFromRepo } from "../deploy/source";
+import { composeLifecycle, removeComposeProjectForApp } from "../deploy/compose-runner";
 import { ApiError } from "../lib/errors";
 import { ghcrLatestImage } from "../lib/github";
 import type { AppRow } from "../db/schema";
@@ -37,6 +40,7 @@ export const appsRouter = Router();
 const availabilityQuerySchema = z.object({
   name: z.string().optional().default(""),
   subdomain: z.string().optional().default(""),
+  domain: z.string().optional(),
 });
 
 appsRouter.get("/apps", (_req, res) => {
@@ -46,7 +50,35 @@ appsRouter.get("/apps", (_req, res) => {
 
 appsRouter.get("/apps/availability", (req, res) => {
   const query = availabilityQuerySchema.parse(req.query);
-  res.json(checkAvailability(query.name, query.subdomain));
+  res.json(checkAvailability(query.name, query.subdomain, query.domain));
+});
+
+appsRouter.post("/apps/scan-compose", async (req, res) => {
+  const input = parseBody(scanComposeSchema, req.body);
+  let compose = input.compose ?? null;
+  let composePath: string | null = input.composePath ?? null;
+  if (input.repoUrl && input.branch) {
+    try {
+      const fetched = await fetchComposeFromRepo({
+        repoUrl: input.repoUrl,
+        branch: input.branch,
+        token: input.repoToken ?? getGithubToken(),
+        composePath: input.composePath ?? null,
+        log: () => undefined,
+      });
+      compose = fetched.text;
+      composePath = fetched.path;
+    } catch (error) {
+      throw new ApiError(
+        422,
+        `Could not read the compose file from the repository: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  if (!compose) throw new ApiError(400, "No compose file was supplied.");
+  res.json({ compose, composePath, scan: scanCompose(compose) });
 });
 
 appsRouter.post("/apps", (req, res) => {
@@ -89,29 +121,41 @@ appsRouter.delete("/apps/:id", async (req, res) => {
   const removeVolumes = req.query.removeVolumes === "true";
   const warnings: string[] = [];
 
-  const containers = await listAppContainers(id);
-  for (const container of containers) {
+  if (app.sourceType === "compose") {
     try {
-      await removeContainer(container.id);
+      await removeComposeProjectForApp(app, removeVolumes, () => undefined);
     } catch (error) {
       warnings.push(
-        `Could not remove container ${container.id.slice(0, 12)}: ${
+        `Could not remove the compose project: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
     }
-  }
-
-  if (removeVolumes) {
-    for (const volume of app.volumes) {
+  } else {
+    const containers = await listAppContainers(id);
+    for (const container of containers) {
       try {
-        await removeAppVolume(volume.volumeName);
+        await removeContainer(container.id);
       } catch (error) {
         warnings.push(
-          `Could not remove volume ${volume.volumeName}: ${
+          `Could not remove container ${container.id.slice(0, 12)}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
+      }
+    }
+
+    if (removeVolumes) {
+      for (const volume of app.volumes) {
+        try {
+          await removeAppVolume(volume.volumeName);
+        } catch (error) {
+          warnings.push(
+            `Could not remove volume ${volume.volumeName}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       }
     }
   }
@@ -130,8 +174,12 @@ appsRouter.post("/apps/:id/deploy", (req, res) => {
 appsRouter.post("/apps/:id/restart", async (req, res) => {
   const id = requireParam(req.params, "id");
   const app = requireAppRow(id);
-  if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
-  await restartContainer(app.containerId);
+  if (app.sourceType === "compose") {
+    await composeLifecycle(app, "restart");
+  } else {
+    if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
+    await restartContainer(app.containerId);
+  }
   setAppStatus(id, "running");
   res.json({ ok: true });
 });
@@ -139,8 +187,12 @@ appsRouter.post("/apps/:id/restart", async (req, res) => {
 appsRouter.post("/apps/:id/stop", async (req, res) => {
   const id = requireParam(req.params, "id");
   const app = requireAppRow(id);
-  if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
-  await stopContainer(app.containerId);
+  if (app.sourceType === "compose") {
+    await composeLifecycle(app, "stop");
+  } else {
+    if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
+    await stopContainer(app.containerId);
+  }
   setAppStatus(id, "stopped");
   res.json({ ok: true });
 });
@@ -148,8 +200,12 @@ appsRouter.post("/apps/:id/stop", async (req, res) => {
 appsRouter.post("/apps/:id/start", async (req, res) => {
   const id = requireParam(req.params, "id");
   const app = requireAppRow(id);
-  if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
-  await startContainer(app.containerId);
+  if (app.sourceType === "compose") {
+    await composeLifecycle(app, "start");
+  } else {
+    if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
+    await startContainer(app.containerId);
+  }
   setAppStatus(id, "running");
   res.json({ ok: true });
 });

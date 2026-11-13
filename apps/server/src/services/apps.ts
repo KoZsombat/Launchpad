@@ -1,9 +1,10 @@
-import { and, eq, ne, or } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type {
   AppStatus,
   AvailabilityResult,
   CreateAppInput,
   PublicApp,
+  PublicComposeService,
   PublicEnvVar,
   UpdateAppInput,
 } from "@launchpad/shared";
@@ -11,12 +12,16 @@ import { appUrl, createAppSchema } from "@launchpad/shared";
 import { randomUUID } from "node:crypto";
 import { decryptOptional, encryptSecret, generateSecret } from "../crypto";
 import { db } from "../db";
-import { apps, type AppRow, type StoredEnvVar } from "../db/schema";
-import { ApiError } from "../lib/errors";
 import {
-  getLatestDeployment,
-  serializeDeployment,
-} from "./deployments";
+  apps,
+  type AppRow,
+  type StoredComposeService,
+  type StoredEnvVar,
+} from "../db/schema";
+import { ApiError } from "../lib/errors";
+import { getLatestDeployment, serializeDeployment } from "./deployments";
+import { scanCompose } from "../deploy/compose";
+import { getBaseDomain } from "./settings";
 
 export function getAppRow(id: string): AppRow | undefined {
   return db.select().from(apps).where(eq(apps.id, id)).get();
@@ -32,39 +37,97 @@ export function listAppRows(): AppRow[] {
   return db.select().from(apps).all();
 }
 
-export function checkAvailability(name: string, subdomain: string): AvailabilityResult {
-  const nameRows = db.select({ id: apps.id }).from(apps).where(eq(apps.name, name)).all();
-  const subdomainRows = db
-    .select({ id: apps.id })
+/** Every hostname an app answers on, including compose service routes. */
+export function appSubdomains(row: AppRow): string[] {
+  const values = [
+    row.subdomain,
+    ...row.composeServices
+      .filter((service) => service.expose)
+      .flatMap((service) => service.subdomains),
+  ];
+  return [...new Set(values.filter(Boolean))];
+}
+
+export function checkAvailability(
+  name: string,
+  subdomain: string,
+  domain?: string | null,
+): AvailabilityResult {
+  const effectiveDomain = domain?.trim().toLowerCase() || getBaseDomain();
+  const rows = db
+    .select({
+      id: apps.id,
+      name: apps.name,
+      subdomain: apps.subdomain,
+      domain: apps.domain,
+      composeServices: apps.composeServices,
+    })
     .from(apps)
-    .where(eq(apps.subdomain, subdomain))
     .all();
   return {
-    nameAvailable: nameRows.length === 0,
-    subdomainAvailable: subdomainRows.length === 0,
+    nameAvailable: !rows.some((row) => row.name === name),
+    subdomainAvailable: !rows.some((row) => {
+      if ((row.domain ?? getBaseDomain()) !== effectiveDomain) return false;
+      return (
+        row.subdomain === subdomain ||
+        row.composeServices.some(
+          (service) => service.expose && service.subdomains.includes(subdomain),
+        )
+      );
+    }),
   };
 }
 
-function assertUniqueIdentity(name: string, subdomain: string, excludeId?: string): void {
+function assertUniqueName(name: string, excludeId?: string): void {
   const conflict = db
-    .select({ id: apps.id, name: apps.name, subdomain: apps.subdomain })
+    .select({ id: apps.id })
     .from(apps)
-    .where(
-      excludeId
-        ? and(or(eq(apps.name, name), eq(apps.subdomain, subdomain)), ne(apps.id, excludeId))
-        : or(eq(apps.name, name), eq(apps.subdomain, subdomain)),
-    )
+    .where(excludeId ? and(eq(apps.name, name), ne(apps.id, excludeId)) : eq(apps.name, name))
     .get();
-  if (!conflict) return;
-  if (conflict.name === name) {
+  if (conflict) {
     throw new ApiError(409, `The name "${name}" is already in use.`, { field: "name" });
   }
-  throw new ApiError(409, `The subdomain "${subdomain}" is already in use.`, {
-    field: "subdomain",
-  });
 }
 
-function toStoredEnv(entries: CreateAppInput["envVars"], existing: StoredEnvVar[] = []): StoredEnvVar[] {
+function assertUniqueSubdomains(
+  subdomains: string[],
+  domain: string,
+  excludeId?: string,
+): void {
+  const values = [...new Set(subdomains.filter(Boolean))];
+  if (values.length === 0) return;
+  const rows = db
+    .select({
+      id: apps.id,
+      name: apps.name,
+      subdomain: apps.subdomain,
+      domain: apps.domain,
+      composeServices: apps.composeServices,
+    })
+    .from(apps)
+    .all();
+  for (const row of rows) {
+    if (excludeId && row.id === excludeId) continue;
+    if ((row.domain ?? getBaseDomain()) !== domain) continue;
+    const occupied = new Set([
+      row.subdomain,
+      ...row.composeServices
+        .filter((service) => service.expose)
+        .flatMap((service) => service.subdomains),
+    ]);
+    const conflict = values.find((value) => occupied.has(value));
+    if (conflict) {
+      throw new ApiError(409, `The subdomain "${conflict}" is already in use on ${domain}.`, {
+        field: "subdomain",
+      });
+    }
+  }
+}
+
+function toStoredEnv(
+  entries: CreateAppInput["envVars"],
+  existing: StoredEnvVar[] = [],
+): StoredEnvVar[] {
   const byKey = new Map(existing.map((entry) => [entry.key, entry]));
   return entries.map((entry) => {
     if (entry.value === undefined) {
@@ -78,15 +141,93 @@ function toStoredEnv(entries: CreateAppInput["envVars"], existing: StoredEnvVar[
   });
 }
 
+type ComposeServiceInput = CreateAppInput["composeServices"][number];
+
+function toStoredComposeServices(
+  entries: ComposeServiceInput[],
+  existing: StoredComposeService[] = [],
+): StoredComposeService[] {
+  const byName = new Map(existing.map((service) => [service.name, service]));
+  return entries.map((service) => ({
+    name: service.name,
+    expose: service.expose,
+    subdomains: service.subdomains,
+    internalPort: service.internalPort,
+    healthPath: service.healthPath,
+    envVars: toStoredEnv(service.envVars, byName.get(service.name)?.envVars ?? []),
+  }));
+}
+
+/** Re-parses the stored compose snapshot and rejects configs that drifted from it. */
+export function validateComposeConfig(
+  composeFile: string | null,
+  services: StoredComposeService[],
+  extraEnvKeys: Iterable<string> = [],
+): void {
+  if (!composeFile) return;
+  let scan;
+  try {
+    scan = scanCompose(composeFile);
+  } catch (error) {
+    throw new ApiError(422, error instanceof Error ? error.message : String(error), {
+      field: "composeFile",
+    });
+  }
+  const serviceNames = new Set(scan.services.map((service) => service.name));
+  for (const service of services) {
+    if (!serviceNames.has(service.name)) {
+      throw new ApiError(
+        422,
+        `Compose service "${service.name}" was not found in the compose file. Rescan it.`,
+        { field: "composeServices" },
+      );
+    }
+  }
+  const knownEnv = new Set(extraEnvKeys);
+  const missing = scan.requiredEnv.filter((key) => !knownEnv.has(key));
+  if (missing.length > 0) {
+    throw new ApiError(
+      422,
+      `Missing compose values: ${missing.sort().join(", ")}. Add them to the project environment.`,
+      { field: "envVars" },
+    );
+  }
+}
+
 export function createApp(input: CreateAppInput): AppRow {
-  assertUniqueIdentity(input.name, input.subdomain);
+  assertUniqueName(input.name);
+  const exposed = input.composeServices.filter((service) => service.expose);
+  const primarySubdomain =
+    input.sourceType === "compose"
+      ? exposed[0]?.subdomains[0] ?? input.subdomain
+      : input.subdomain;
+  const allSubdomains = [
+    primarySubdomain,
+    ...exposed.flatMap((service) => service.subdomains),
+  ];
+  const domain = input.domain?.trim().toLowerCase() || null;
+  assertUniqueSubdomains(allSubdomains, domain ?? getBaseDomain());
+
+  const storedServices = toStoredComposeServices(input.composeServices);
+  if (input.sourceType === "compose") {
+    validateComposeConfig(
+      input.composeFile ?? null,
+      storedServices,
+      input.envVars.map((entry) => entry.key),
+    );
+  }
+
   const id = randomUUID();
   const now = new Date();
+  const internalPort =
+    input.sourceType === "compose"
+      ? exposed[0]?.internalPort ?? 80
+      : (input.internalPort ?? 80);
   db.insert(apps)
     .values({
       id,
       name: input.name,
-      subdomain: input.subdomain,
+      subdomain: primarySubdomain,
       sourceType: input.sourceType,
       imageRef: input.imageRef || null,
       registryUsername: input.registryUsername || null,
@@ -98,7 +239,12 @@ export function createApp(input: CreateAppInput): AppRow {
       dockerfilePath: input.dockerfilePath || null,
       buildContext: input.buildContext || null,
       repoTokenEnc: input.repoToken ? encryptSecret(input.repoToken) : null,
-      internalPort: input.internalPort,
+      composeFile: input.composeFile || null,
+      composePath: input.composePath || null,
+      composeServices: storedServices,
+      deployTarget: input.deployTarget,
+      domain,
+      internalPort,
       healthPath: input.healthPath,
       envVars: toStoredEnv(input.envVars),
       volumes: input.volumes,
@@ -134,6 +280,12 @@ export function getEnvMap(row: AppRow): Record<string, string> {
   return result;
 }
 
+export function getServiceEnvMap(service: StoredComposeService): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const entry of service.envVars) result[entry.key] = envPlain(entry);
+  return result;
+}
+
 export function getRegistryPassword(row: AppRow): string | null {
   return decryptOptional(row.registryPasswordEnc);
 }
@@ -156,6 +308,18 @@ function deploymentSignature(parts: {
   dockerfilePath: string | null;
   buildContext: string | null;
   repoToken: string | null;
+  composeFile: string | null;
+  composePath: string | null;
+  deployTarget: string;
+  domain: string | null;
+  composeServices: {
+    name: string;
+    expose: boolean;
+    subdomains: string[];
+    internalPort: number;
+    healthPath: string;
+    envVars: { key: string; secret: boolean; value: string }[];
+  }[];
   internalPort: number;
   healthPath: string;
   envVars: { key: string; secret: boolean; value: string }[];
@@ -165,7 +329,27 @@ function deploymentSignature(parts: {
     ...parts,
     envVars: [...parts.envVars].sort((a, b) => a.key.localeCompare(b.key)),
     volumes: [...parts.volumes].sort((a, b) => a.containerPath.localeCompare(b.containerPath)),
+    composeServices: parts.composeServices.map((service) => ({
+      ...service,
+      subdomains: [...service.subdomains].sort(),
+      envVars: [...service.envVars].sort((a, b) => a.key.localeCompare(b.key)),
+    })),
   });
+}
+
+function storedComposeSignature(services: StoredComposeService[]) {
+  return services.map((service) => ({
+    name: service.name,
+    expose: service.expose,
+    subdomains: [...service.subdomains].sort(),
+    internalPort: service.internalPort,
+    healthPath: service.healthPath,
+    envVars: service.envVars.map((entry) => ({
+      key: entry.key,
+      secret: entry.secret,
+      value: envPlain(entry),
+    })),
+  }));
 }
 
 function rowSignature(row: AppRow): string {
@@ -179,6 +363,11 @@ function rowSignature(row: AppRow): string {
     dockerfilePath: row.dockerfilePath,
     buildContext: row.buildContext,
     repoToken: getRepoToken(row),
+    composeFile: row.composeFile,
+    composePath: row.composePath,
+    deployTarget: row.deployTarget,
+    domain: row.domain,
+    composeServices: storedComposeSignature(row.composeServices),
     internalPort: row.internalPort,
     healthPath: row.healthPath,
     envVars: row.envVars.map((entry) => ({
@@ -195,10 +384,37 @@ export function updateApp(
   input: UpdateAppInput,
 ): { row: AppRow; needsRedeploy: boolean } {
   const existing = requireAppRow(id);
-  const nextSubdomain = input.subdomain ?? existing.subdomain;
-  assertUniqueIdentity(existing.name, nextSubdomain, id);
-
   const nextSourceType = input.sourceType ?? existing.sourceType;
+  const nextComposeFile = pickText(input.composeFile, existing.composeFile);
+  const nextComposePath = pickText(input.composePath, existing.composePath);
+  const nextComposeServices =
+    input.composeServices !== undefined
+      ? toStoredComposeServices(input.composeServices, existing.composeServices)
+      : existing.composeServices;
+  const nextDeployTarget = input.deployTarget ?? existing.deployTarget;
+  const nextDomain =
+    input.domain === undefined
+      ? existing.domain
+      : input.domain?.trim().toLowerCase() || null;
+  const nextSubdomain =
+    nextSourceType === "compose"
+      ? input.subdomain ??
+        nextComposeServices.find((service) => service.expose)?.subdomains[0] ??
+        existing.subdomain
+      : input.subdomain ?? existing.subdomain;
+
+  assertUniqueName(existing.name, id);
+  assertUniqueSubdomains(
+    [
+      nextSubdomain,
+      ...nextComposeServices
+        .filter((service) => service.expose)
+        .flatMap((service) => service.subdomains),
+    ],
+    nextDomain ?? getBaseDomain(),
+    id,
+  );
+
   const nextImageRef = pickText(input.imageRef, existing.imageRef);
   const nextRegistryUsername = pickText(input.registryUsername, existing.registryUsername);
   const nextRepoUrl = pickText(input.repoUrl, existing.repoUrl);
@@ -219,15 +435,32 @@ export function updateApp(
         ? null
         : input.repoToken;
 
-  const nextEnv = (
+  const nextStoredEnv =
     input.envVars !== undefined
       ? toStoredEnv(input.envVars, existing.envVars)
-      : existing.envVars
-  ).map((entry) => ({ key: entry.key, secret: entry.secret }));
+      : existing.envVars;
   const nextVolumes = input.volumes ?? existing.volumes;
   const nextHealthPath = input.healthPath ?? existing.healthPath;
-  const nextPort = input.internalPort ?? existing.internalPort;
   const nextCicd = input.cicdEnabled ?? existing.cicdEnabled;
+  const nextPort =
+    input.internalPort ??
+    (nextSourceType === "compose"
+      ? nextComposeServices.find((service) => service.expose)?.internalPort ?? existing.internalPort
+      : existing.internalPort);
+
+  const validationEnv = (
+    input.envVars !== undefined
+      ? input.envVars.map((entry) => ({ key: entry.key, secret: entry.secret }))
+      : existing.envVars.map((entry) => ({ key: entry.key, secret: entry.secret }))
+  );
+  const validationServices = nextComposeServices.map((service) => ({
+    name: service.name,
+    expose: service.expose,
+    subdomains: service.subdomains,
+    internalPort: service.internalPort,
+    healthPath: service.healthPath,
+    envVars: service.envVars.map((entry) => ({ key: entry.key, secret: entry.secret })),
+  }));
 
   createAppSchema.parse({
     name: existing.name,
@@ -243,10 +476,19 @@ export function updateApp(
     repoToken: nextRepoTokenPlain ?? undefined,
     internalPort: nextPort,
     healthPath: nextHealthPath,
-    envVars: nextEnv,
+    envVars: validationEnv,
     volumes: nextVolumes,
     cicdEnabled: nextCicd,
+    deployTarget: nextDeployTarget,
+    domain: nextDomain,
+    composeFile: nextComposeFile ?? undefined,
+    composePath: nextComposePath ?? undefined,
+    composeServices: validationServices,
   });
+
+  if (nextSourceType === "compose") {
+    validateComposeConfig(nextComposeFile, nextComposeServices, validationEnv.map((entry) => entry.key));
+  }
 
   const nextSignature = deploymentSignature({
     sourceType: nextSourceType,
@@ -258,20 +500,18 @@ export function updateApp(
     dockerfilePath: nextDockerfilePath,
     buildContext: nextBuildContext,
     repoToken: nextRepoTokenPlain,
+    composeFile: nextComposeFile,
+    composePath: nextComposePath,
+    deployTarget: nextDeployTarget,
+    domain: nextDomain,
+    composeServices: storedComposeSignature(nextComposeServices),
     internalPort: nextPort,
     healthPath: nextHealthPath,
-    envVars:
-      input.envVars !== undefined
-        ? input.envVars.map((entry) => ({
-            key: entry.key,
-            secret: entry.secret,
-            value: entry.value ?? envPlain(existing.envVars.find((e) => e.key === entry.key) ?? { key: "", secret: false, valueEnc: "" }),
-          }))
-        : existing.envVars.map((entry) => ({
-            key: entry.key,
-            secret: entry.secret,
-            value: envPlain(entry),
-          })),
+    envVars: nextStoredEnv.map((entry) => ({
+      key: entry.key,
+      secret: entry.secret,
+      value: envPlain(entry),
+    })),
     volumes: nextVolumes,
   });
 
@@ -300,12 +540,14 @@ export function updateApp(
           : input.repoToken === ""
             ? null
             : encryptSecret(input.repoToken),
+      composeFile: nextComposeFile,
+      composePath: nextComposePath,
+      composeServices: nextComposeServices,
+      deployTarget: nextDeployTarget,
+      domain: nextDomain,
       internalPort: nextPort,
       healthPath: nextHealthPath,
-      envVars:
-        input.envVars !== undefined
-          ? toStoredEnv(input.envVars, existing.envVars)
-          : existing.envVars,
+      envVars: nextStoredEnv,
       volumes: nextVolumes,
       cicdEnabled: nextCicd,
       updatedAt: now,
@@ -322,12 +564,19 @@ export function setAppStatus(id: string, status: AppStatus): void {
 
 export function setAppDeployed(
   id: string,
-  containerId: string,
+  containerId: string | null,
   imageTag: string,
   status: AppStatus = "running",
+  composeProject?: string | null,
 ): void {
   db.update(apps)
-    .set({ containerId, imageTag, status, updatedAt: new Date() })
+    .set({
+      containerId,
+      imageTag,
+      status,
+      ...(composeProject !== undefined ? { composeProject } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(apps.id, id))
     .run();
 }
@@ -356,14 +605,31 @@ function publicEnvVars(entries: StoredEnvVar[]): PublicEnvVar[] {
   });
 }
 
+function publicComposeServices(services: StoredComposeService[]): PublicComposeService[] {
+  return services.map((service) => ({
+    name: service.name,
+    expose: service.expose,
+    subdomains: service.subdomains,
+    internalPort: service.internalPort,
+    healthPath: service.healthPath,
+    envVars: publicEnvVars(service.envVars),
+  }));
+}
+
 export function toPublicApp(row: AppRow, baseDomain: string): PublicApp {
   const lastDeployment = getLatestDeployment(row.id);
+  const effectiveDomain = row.domain ?? baseDomain;
   return {
     id: row.id,
     name: row.name,
     subdomain: row.subdomain,
-    url: appUrl(row.subdomain, baseDomain),
+    subdomains: appSubdomains(row),
+    url: appUrl(row.subdomain, effectiveDomain),
+    baseDomain: effectiveDomain,
+    domain: row.domain,
+    defaultDomain: baseDomain,
     sourceType: row.sourceType,
+    deployTarget: row.deployTarget,
     imageRef: row.imageRef,
     registryUsername: row.registryUsername,
     registryPasswordSet: Boolean(row.registryPasswordEnc),
@@ -371,6 +637,10 @@ export function toPublicApp(row: AppRow, baseDomain: string): PublicApp {
     branch: row.branch,
     dockerfilePath: row.dockerfilePath,
     buildContext: row.buildContext,
+    composeFile: row.composeFile,
+    composePath: row.composePath,
+    composeServices: publicComposeServices(row.composeServices),
+    composeProject: row.composeProject,
     repoTokenSet: Boolean(row.repoTokenEnc),
     internalPort: row.internalPort,
     healthPath: row.healthPath,
@@ -385,3 +655,4 @@ export function toPublicApp(row: AppRow, baseDomain: string): PublicApp {
     lastDeployment: lastDeployment ? serializeDeployment(lastDeployment) : null,
   };
 }
+

@@ -9,6 +9,7 @@ import {
 } from "../deploy/logs";
 import { followContainerLogs } from "../docker/logs";
 import { requireAppRow } from "../services/apps";
+import { followComposeLogs } from "../deploy/compose-runner";
 import { getDeploymentForApp } from "../services/deployments";
 
 export const logsRouter = Router();
@@ -58,6 +59,35 @@ logsRouter.get("/apps/:id/deployments/:deploymentId/logs", (req, res) => {
 
 logsRouter.get("/apps/:id/logs", async (req, res) => {
   const app = requireAppRow(requireParam(req.params, "id"));
+
+  if (app.sourceType === "compose") {
+    openSse(res);
+    sendSse(res, "status", { composeProject: app.composeProject });
+    let cleanup: (() => void) | null = null;
+    try {
+      cleanup = await followComposeLogs(app, (line) => {
+        if (!res.writableEnded) sendSse(res, "log", { line });
+      });
+    } catch (error) {
+      sendSse(res, "error", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.end();
+      return;
+    }
+    const stopHeartbeat = startSseHeartbeat(res);
+    let closed = false;
+    const finish = (): void => {
+      if (closed) return;
+      closed = true;
+      stopHeartbeat();
+      cleanup?.();
+      res.end();
+    };
+    req.on("close", finish);
+    return;
+  }
+
   if (!app.containerId) throw new ApiError(409, "This app has not been deployed yet.");
 
   openSse(res);

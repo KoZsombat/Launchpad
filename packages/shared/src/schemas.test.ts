@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAppSchema, updateAppSchema } from "./schemas";
+import { createAppSchema, domainSchema, updateAppSchema } from "./schemas";
 
 const imageApp = {
   name: "blog",
@@ -117,6 +117,21 @@ describe("createAppSchema", () => {
   });
 });
 
+describe("domainSchema", () => {
+  it("accepts real domains and localhost", () => {
+    expect(domainSchema.safeParse("example.com").success).toBe(true);
+    expect(domainSchema.safeParse("petrik.hu").success).toBe(true);
+    expect(domainSchema.safeParse("staging.example.com").success).toBe(true);
+    expect(domainSchema.safeParse("localhost").success).toBe(true);
+  });
+
+  it("rejects invalid hostnames", () => {
+    for (const value of ["", "localhost:3000", "-bad.com", "bad_.com", "a".repeat(64) + ".com"]) {
+      expect(domainSchema.safeParse(value).success).toBe(false);
+    }
+  });
+});
+
 describe("updateAppSchema", () => {
   it("accepts a partial environment update", () => {
     const parsed = updateAppSchema.safeParse({
@@ -127,5 +142,92 @@ describe("updateAppSchema", () => {
 
   it("rejects an empty update", () => {
     expect(updateAppSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("compose projects", () => {
+  const composeFile = `services:
+  web:
+    image: nginx:1.27
+    ports: ["8080:80"]
+  api:
+    image: node:22
+    ports: ["3000:3000"]
+`;
+
+  const composeApp = {
+    name: "shop",
+    subdomain: "shop",
+    sourceType: "compose" as const,
+    composeFile,
+    internalPort: 80,
+    composeServices: [
+      {
+        name: "web",
+        expose: true,
+        subdomains: ["shop", "www-shop"],
+        internalPort: 80,
+        healthPath: "/",
+      },
+      {
+        name: "api",
+        expose: true,
+        subdomains: ["api-shop"],
+        internalPort: 3000,
+        healthPath: "/healthz",
+      },
+    ],
+  };
+
+  it("accepts a compose project with several routed services", () => {
+    expect(createAppSchema.safeParse(composeApp).success).toBe(true);
+  });
+
+  it("accepts a per-project domain, including localhost", () => {
+    expect(createAppSchema.safeParse({ ...composeApp, domain: "localhost" }).success).toBe(true);
+    expect(createAppSchema.safeParse({ ...composeApp, domain: "petrik.hu" }).success).toBe(true);
+    expect(createAppSchema.safeParse({ ...composeApp, domain: "bad_domain" }).success).toBe(false);
+  });
+
+  it("requires the primary subdomain to belong to a published service", () => {
+    const parsed = createAppSchema.safeParse({ ...composeApp, subdomain: "other" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a published service without a subdomain", () => {
+    const parsed = createAppSchema.safeParse({
+      ...composeApp,
+      composeServices: [{ ...composeApp.composeServices[0]!, subdomains: [] }],
+      subdomain: "shop",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("keeps subdomains on unpublished services without claiming them", () => {
+    const parsed = createAppSchema.safeParse({
+      ...composeApp,
+      subdomain: "api-shop",
+      composeServices: [
+        { ...composeApp.composeServices[0]!, expose: false, subdomains: ["shop", "www-shop"] },
+        composeApp.composeServices[1]!,
+      ],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects duplicate subdomains across published services", () => {
+    const parsed = createAppSchema.safeParse({
+      ...composeApp,
+      composeServices: [
+        composeApp.composeServices[0]!,
+        { ...composeApp.composeServices[1]!, subdomains: ["shop"] },
+      ],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("requires a compose file or a repository", () => {
+    const parsed = createAppSchema.safeParse({ ...composeApp, composeFile: undefined });
+    expect(parsed.success).toBe(false);
   });
 });

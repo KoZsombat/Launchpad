@@ -51,8 +51,9 @@ hooksRouter.post("/github/:appId", rawBody, (req, res) => {
   if (!appId) throw new ApiError(400, "Missing app id.");
   const app = getAppRow(appId);
   if (!app) throw new ApiError(404, "App not found.");
-  if (app.sourceType !== "github") {
-    throw new ApiError(400, "This app does not use a GitHub source.");
+  const usesGithub = app.sourceType === "github" || (app.sourceType === "compose" && Boolean(app.repoUrl));
+  if (!usesGithub) {
+    throw new ApiError(400, "This app does not use a GitHub repository.");
   }
   if (app.cicdEnabled) {
     throw new ApiError(409, "This app deploys through its GitHub Actions workflow.");
