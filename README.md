@@ -2,6 +2,8 @@
 
 Self-hosted deploy panel for a Proxmox VM running Docker. Fill in a form, Launchpad pulls or builds an image, starts a container on the shared `web` network, waits for its health check, and Traefik publishes it at `<subdomain>.<BASE_DOMAIN>` through a Cloudflare Tunnel.
 
+Compose projects are first-class: paste or scan a `docker-compose.yml`, review the detected services, assign one or more subdomains per service, and deploy the whole stack. SSH is optional and only used when a project runs on a separate host.
+
 ```
 Internet ── HTTPS ──> Cloudflare (wildcard DNS + Access)
                             │
@@ -94,6 +96,8 @@ Keep the DNS records you need (for example the Proxmox host record) and delete c
 
 The wildcard hostname is what makes every new app subdomain work. Launchpad never calls the Cloudflare API for app DNS: Traefik labels on each app container are enough.
 
+There is no tunnel setting inside Launchpad's dashboard. The connector is the `cloudflared` service in `docker-compose.yml`, and it reads `TUNNEL_TOKEN` from `.env`. After `docker compose up -d`, `docker compose logs -f cloudflared` should show `Registered tunnel connection`. To rotate the token, update `.env` and run `docker compose up -d --force-recreate cloudflared`.
+
 ## 4. Create the Cloudflare Access application for the panel
 
 1. Zero Trust → **Access → Applications → Add an application → Self-hosted**.
@@ -178,6 +182,51 @@ How deployments stay up during a redeploy:
 - The service has an active health check (the app's health path, every 5 s). Traffic only moves to the new container after it answers.
 - Launchpad removes the old container after the new one is healthy. If the new container never becomes healthy, it is removed and the old one keeps serving.
 
+## 6b. Deploy a compose project
+
+1. Click **New app** and choose **Compose project**.
+2. Paste a compose file, or point Launchpad at a repository, branch and compose path.
+Each project can override the panel domain in its configuration. Leave it empty to use the global base domain, set a real hostname such as `petrik.hu`, or set it to `localhost` for local tests. `localhost` projects use `http://<service>.localhost` host rules; browsers resolve `*.localhost` to loopback, but a local Traefik on the `web` network is still required to serve them. Subdomain uniqueness is scoped to the effective domain, so two projects can both use `api` on different domains.
+
+For localhost tests, run a local Traefik once (re-run it after a Docker restart):
+
+```bash
+docker run -d --name traefik-local --network web -p 80:80 \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  traefik:v3 \
+  --providers.docker=true \
+  --providers.docker.exposedbydefault=false \
+  --providers.docker.network=web \
+  --entrypoints.web.address=:80
+```
+
+Then open `http://<service>.localhost`. If port 80 is taken, publish `8080:80` and use `http://<service>.localhost:8080`. Update the project env and build args (`BETTER_AUTH_URL`, `CORS_ORIGINS`, admin `VITE_API_URL`/`VITE_WEB_URL`, web `PUBLIC_SITE_URL`) to the localhost hostnames.
+
+The compose source can be inline YAML or a GitHub repository (branch + compose path). Repository-sourced projects are re-read from the branch on every deployment and support a GitHub push webhook: a push to the configured branch queues a new deployment. CI/CD with GitHub Actions remains available for single-container Dockerfile builds; compose stacks use the push webhook instead.
+
+3. Click **Scan compose**. Launchpad parses the YAML and asks you to confirm:
+   - which services are published through Traefik,
+   - one or more subdomains per published service,
+   - the container port and health path per service,
+   - literal environment values and any `${VAR}` placeholders.
+4. Choose a **deployment target**:
+   - **This host** (default) uses the panel's Docker socket. No SSH is needed.
+   - **Separate host** runs the stack over SSH using **Settings → Remote hosts**.
+5. Submit. Launchpad renders a deploy file that:
+   - adds Traefik labels to published services (one router per service, all hostnames in one rule),
+   - attaches them to the external `web` network,
+   - removes published host ports from every service, so several projects can use the same internal ports,
+   - prefixes named volumes so their data survives redeploys,
+   - keeps every other compose feature (`depends_on`, commands, bind mounts, extra networks).
+
+Compose stacks use a stable `launchpad-<app>` project name. The previous project is stopped before the new configuration starts because two containers cannot share a Postgres data volume at once; if the new stack fails, the previous project is started again. Compose services that are not published still run for dependencies.
+
+Databases and queues (Postgres, MySQL, Redis, MongoDB, RabbitMQ, Kafka, …) are detected from the service name, image and healthcheck and are **not published by default**; publishing them would make Traefik probe an HTTP health path that does not exist. Set the health path explicitly for HTTP services, e.g. `/health` or `/api/health`. On a failed deploy the panel now appends the containers' logs before removing the failed stack.
+
+> Remote targets cannot build images on the remote host; use prebuilt images for those services. Traefik routing on a remote host requires Traefik (and the `web` network) to be present there.
+
+If a GitHub repository you are adding contains a compose file, use the **Use docker-compose** shortcut on the GitHub source tab: it switches to the compose flow with the repository and branch prefilled and scans the repo.
+
 ## 7. Set up CI/CD with GitHub Actions
 
 Prerequisites: a GitHub source app and a GitHub token stored in **Settings → GitHub** (classic PAT with `repo` scope; needed to commit the workflow file).
@@ -213,17 +262,47 @@ For a GitHub-source app with CI/CD **disabled**, Launchpad builds the branch its
 
 Launchpad verifies `X-Hub-Signature-256` (HMAC-SHA256 over the raw body), checks the ref matches the configured branch, and queues a build. The **Redeploy** button does the same build on demand.
 
-## Web SSH terminal (GUI / CLI)
+## Web SSH terminal (GUI / CLI) and remote projects
 
-The panel includes a browser terminal that opens an SSH session to the VM.
+SSH is optional. Projects deployed with the **local** target use the Docker socket and never open an SSH connection. The same credentials are used for two things:
 
-1. Ensure `sshd` runs on the VM and you know a username plus password or an unencrypted private key.
-2. In **Settings → Web SSH terminal** set host `host.docker.internal` (compose maps it to the VM gateway) or the VM's LAN IP, the SSH port (usually 22), the username and the auth method.
+- the browser terminal,
+- deploying a project whose target is a **separate host**.
+
+1. Ensure `sshd` runs on the VM (for the terminal) and/or on the remote host (for remote projects), and you know a username plus password or an unencrypted private key.
+2. In **Settings → Remote hosts & web SSH terminal** set host `host.docker.internal` (compose maps it to the VM gateway) or the VM's LAN IP, the SSH port (usually 22), the username and the auth method.
 3. Use the **GUI / CLI** switch in the sidebar (or `Ctrl + \``) to move between the dashboard and the terminal.
 
 The connection originates inside the panel container on the `web` network. The SSH host key is currently accepted without pinning; restrict the panel's network exposure and rely on Cloudflare Access.
 
 ## Local development
+
+### Local Mac testing (Docker Desktop)
+
+Running `pnpm dev` on macOS cannot pass compose/container health checks: the panel process on the host cannot reach Docker Desktop container IPs on the `web` network. Run the panel as a container on `web` instead:
+
+```bash
+docker build -t launchpad:local .
+docker network create web 2>/dev/null || true
+mkdir -p data-local
+
+docker run -d --name launchpad-local --network web -p 3000:3000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD/data-local:/data" \
+  -e NODE_ENV=development -e PORT=3000 \
+  -e BASE_DOMAIN=example.com \
+  -e ADMIN_EMAIL=admin@example.com -e ADMIN_PASSWORD=password123 \
+  -e BETTER_AUTH_SECRET=local-dev-secret-at-least-32-characters \
+  -e BETTER_AUTH_URL=http://localhost:3000 \
+  -e ENCRYPTION_KEY=local-dev-encryption-key-32-chars \
+  -e DATABASE_PATH=/data/launchpad.db -e DATA_DIR=/data \
+  -e WEB_DIST=/app/public -e COOKIE_SECURE=false \
+  launchpad:local
+```
+
+Open `http://localhost:3000`. `data-local/` is ignored by Git and Docker. For `localhost` project domains, run the local Traefik command in the compose section above. This path is for local testing only; use the full Compose stack and Cloudflare tunnel for the real deployment.
+
+### Host development
 
 ```bash
 corepack enable            # or install pnpm 12 yourself
@@ -232,6 +311,8 @@ docker network create web  # only if you want to deploy from your laptop
 cp .env.example .env       # set BETTER_AUTH_URL=http://localhost:3000, COOKIE_SECURE=false
 pnpm dev                   # API on :3000, Vite on :5173 with /api proxy
 ```
+
+Host deployment works for UI development, but use the containerized panel above when testing compose health checks on macOS.
 
 `.env` for local development:
 
@@ -266,15 +347,16 @@ pnpm typecheck
 pnpm build
 ```
 
-Tests cover shared Zod validation, subdomain/reserved-name rules, Traefik label generation, the deployment state machine and GitHub webhook HMAC verification.
+Tests cover shared Zod validation, subdomain/reserved-name rules, multi-subdomain Traefik label generation, compose scanning/generation, the deployment state machine and GitHub webhook HMAC verification.
 
 ## Operations notes
 
 - **Data**: `./data/launchpad.db` (SQLite), `./data/repos/<app-id>` (cloned branches). Back up this directory.
 - **Secrets at rest**: env values, registry credentials, GitHub/GHCR tokens, the webhook secret and the SSH password/key are encrypted with AES-256-GCM using `ENCRYPTION_KEY`. Changing that key makes existing secrets unreadable.
 - **Base domain changes** only affect future deployments; redeploy an app to rewrite its Traefik `Host()` rule.
-- **App names and subdomains** are unique and immutable in the UI. Delete and recreate to rename.
-- **Volumes**: a volume is created on first deploy. Deleting an app can optionally remove its named volumes.
+- **App names and subdomains** are unique per effective domain. Delete and recreate to rename. Compose service subdomains are validated against every project's hostnames on that domain.
+- **Volumes**: a volume is created on first deploy. Single-container volumes use their configured names; compose named volumes are stored as `launchpad-<project>-<name>` so they survive redeploys. Deleting an app can optionally remove its named volumes.
+- **Compose projects** use a stable `launchpad-<app>` project name. The previous project is stopped before the new one starts (required for shared database volumes) and restarted if the new deployment fails.
 - **Logs**: deployment logs are stored with the deployment. Container logs are streamed live via SSE and are not persisted.
 - **Single user**: Better Auth email/password with sign-up disabled. Login is rate-limited to 10 attempts per 15 minutes per IP.
 
@@ -289,5 +371,9 @@ Tests cover shared Zod validation, subdomain/reserved-name rules, Traefik label 
 | GHCR pull `unauthorized` | Add a `read:packages` token under Settings → GHCR, or make the package public. |
 | Better Auth “Invalid origin” | `BETTER_AUTH_URL` must exactly match the browser origin, e.g. `https://panel.example.com`. |
 | Webhook returns `401` | Wrong per-app secret, or Cloudflare Access blocked the request before it reached the panel. |
-| SSH terminal says “not configured” | Fill in Settings → Web SSH terminal, and verify the panel container can reach the VM's sshd. |
+| SSH terminal says “not configured” | Fill in Settings → Remote hosts & web SSH terminal, and verify the panel container can reach the VM's sshd. |
+| Remote compose project fails immediately | SSH credentials are missing, or the remote Docker CLI/compose plugin is absent. Remote projects cannot build images. |
+| Compose project from a GitHub repo does not redeploy on push | The repository webhook secret must match the project's webhook secret, and the push must target the configured branch. Compose projects use the push webhook, not the Actions workflow. |
+| Compose service is not reachable | The service must be published, have a subdomain, listen on the configured container port, and (remote targets) be behind a Traefik instance on that host. |
+| Compose deploy fails on missing variables | Fill every required `${VAR}` under the project's compose variables or per-service environment overrides. |
 | SSE log stream stalls behind a proxy | Responses set `X-Accel-Buffering: no`; ensure no additional buffering proxy is in front of Traefik. |
