@@ -153,7 +153,7 @@ export function SettingsPage() {
         <Panel title="Routing" description="Used for new subdomains and Traefik host rules.">
           <Field
             label="Base domain"
-            hint="Apps are published at <subdomain>.<base domain>. Changing this only affects future deployments."
+            hint="Default for new projects. Each project can override it, including localhost for tests. Changing this only affects future deployments."
           >
             <input
               className={inputClass}
@@ -227,9 +227,13 @@ export function SettingsPage() {
         </Panel>
 
         <Panel
-          title="Web SSH terminal"
-          description="The panel container opens an SSH connection to your VM. Use host.docker.internal or the VM IP."
+          title="Remote hosts & web SSH terminal (optional)"
+          description="Local projects use the Docker socket and need no SSH. Configure this only for projects deployed to a separate host, or to use the browser terminal. Use host.docker.internal or the VM IP."
         >
+          <p className="mb-4 rounded-lg border border-edge bg-panel-2 px-3 py-2 text-xs text-muted">
+            This is only required when projects run on a separate machine. Projects with the
+            local target never open an SSH connection.
+          </p>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Host" className="sm:col-span-2">
               <input

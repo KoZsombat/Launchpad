@@ -11,6 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { appUrl } from "@launchpad/shared";
 import type {
   DeploymentSummary,
   PublicApp,
@@ -27,6 +28,8 @@ import {
   cn,
 } from "../components/ui";
 import { ConfigEditor, type AppConfigUpdate } from "../components/ConfigEditor";
+import { ComposeConfigPanel, type ComposeConfigUpdate } from "../components/ComposeConfigPanel";
+import { GitHubPushPanel } from "../components/GitHubPushPanel";
 import { CicdPanel } from "../components/CicdPanel";
 import {
   ContainerLogsPanel,
@@ -34,6 +37,7 @@ import {
 } from "../components/DeploymentLogs";
 
 type ActionKind = "deploy" | "restart" | "stop" | "start";
+type ConfigUpdate = AppConfigUpdate | ComposeConfigUpdate;
 
 interface ActionResponse {
   ok?: boolean;
@@ -89,7 +93,7 @@ export function AppDetailPage() {
   });
 
   const saveConfig = useMutation({
-    mutationFn: (update: AppConfigUpdate) =>
+    mutationFn: (update: ConfigUpdate) =>
       apiJson<{ app: PublicApp; deployment: DeploymentSummary | null }>(
         `/api/apps/${appId}`,
         "PATCH",
@@ -182,15 +186,28 @@ export function AppDetailPage() {
             <h1 className="truncate text-2xl font-semibold tracking-tight">{app.name}</h1>
             <StatusBadge status={app.status} />
           </div>
-          <a
-            href={app.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 inline-flex items-center gap-1.5 text-sm text-muted hover:text-accent"
-          >
-            {app.url}
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+            {app.subdomains.map((subdomain) => {
+              const url = appUrl(subdomain, app.baseDomain);
+              return (
+                <a
+                  key={subdomain}
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-accent"
+                >
+                  {subdomain}
+                  {subdomain === app.subdomain ? (
+                    <span className="rounded border border-edge px-1 text-[10px] uppercase text-muted">
+                      primary
+                    </span>
+                  ) : null}
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              );
+            })}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -240,14 +257,38 @@ export function AppDetailPage() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <MetaCard label="Source" value={app.sourceType === "image" ? app.imageRef ?? "—" : app.repoUrl ?? "—"} mono />
-        <MetaCard label="Internal port" value={String(app.internalPort)} mono />
+        <MetaCard
+          label="Source"
+          value={
+            app.sourceType === "compose"
+              ? `compose · ${app.composeServices.length} service${app.composeServices.length === 1 ? "" : "s"}`
+              : app.sourceType === "image"
+                ? app.imageRef ?? "—"
+                : app.repoUrl ?? "—"
+          }
+          mono
+        />
+        <MetaCard
+          label="Target"
+          value={app.deployTarget === "local" ? "This host" : "Separate host"}
+          hint={app.deployTarget === "remote" ? "Deployed over SSH" : "Docker socket"}
+        />
         <MetaCard
           label="Last deploy"
           value={app.lastDeployment ? formatRelative(app.lastDeployment.queuedAt) : "never"}
           hint={app.lastDeployment ? formatDateTime(app.lastDeployment.queuedAt) : undefined}
         />
-        <MetaCard label="Container" value={app.containerId ? shortId(app.containerId) : "—"} mono />
+        <MetaCard
+          label={app.sourceType === "compose" ? "Compose project" : "Container"}
+          value={
+            app.sourceType === "compose"
+              ? app.composeProject?.split(":").pop() ?? "—"
+              : app.containerId
+                ? shortId(app.containerId)
+                : "—"
+          }
+          mono
+        />
       </div>
 
       <Panel
@@ -311,22 +352,41 @@ export function AppDetailPage() {
         ) : null}
       </Panel>
 
-      <ConfigEditor
-        key={app.updatedAt}
-        app={app}
-        saving={saveConfig.isPending}
-        onSave={(update) => saveConfig.mutate(update)}
-      />
+      {app.sourceType === "compose" ? (
+        <ComposeConfigPanel
+          key={app.updatedAt}
+          app={app}
+          saving={saveConfig.isPending}
+          onSave={(update) => saveConfig.mutate(update)}
+        />
+      ) : (
+        <ConfigEditor
+          key={app.updatedAt}
+          app={app}
+          saving={saveConfig.isPending}
+          onSave={(update) => saveConfig.mutate(update)}
+        />
+      )}
 
-      <CicdPanel
-        app={app}
-        toggling={toggleCicd.isPending}
-        onToggle={(enabled) => toggleCicd.mutate(enabled)}
-      />
+      {app.sourceType === "github" ? (
+        <CicdPanel
+          app={app}
+          toggling={toggleCicd.isPending}
+          onToggle={(enabled) => toggleCicd.mutate(enabled)}
+        />
+      ) : null}
+
+      {app.sourceType === "compose" && app.repoUrl ? (
+        <GitHubPushPanel app={app} />
+      ) : null}
 
       <Panel
         title="Container logs"
-        description="Live stdout/stderr from the running container."
+        description={
+          app.sourceType === "compose"
+            ? "Live logs from every container in the compose project."
+            : "Live stdout/stderr from the running container."
+        }
       >
         <ContainerLogsPanel appId={appId} hasContainer={Boolean(app.containerId)} />
       </Panel>
@@ -352,8 +412,9 @@ export function AppDetailPage() {
         }
       >
         <p>
-          This stops and removes the container and deletes the app and its deployment history. The
-          Traefik route disappears with the container.
+          {app.sourceType === "compose"
+            ? "This stops and removes the compose project and deletes the project and its deployment history. Traefik routes disappear with the containers."
+            : "This stops and removes the container and deletes the app and its deployment history. The Traefik route disappears with the container."}
         </p>
         <label className="mt-4 flex items-start gap-2 text-xs">
           <input
@@ -362,7 +423,9 @@ export function AppDetailPage() {
             checked={removeVolumes}
             onChange={(event) => setRemoveVolumes(event.target.checked)}
           />
-          Also remove the named Docker volumes ({app.volumes.length}). This deletes their data.
+          {app.sourceType === "compose"
+            ? "Also remove the named Docker volumes created by this project. This deletes their data."
+            : `Also remove the named Docker volumes (${app.volumes.length}). This deletes their data.`}
         </label>
       </Modal>
     </div>

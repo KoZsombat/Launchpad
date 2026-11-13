@@ -34,7 +34,7 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
         buttonVariants[variant],
         buttonSizes[size],
         className,
@@ -222,10 +222,9 @@ export function Toggle({
     >
       <span
         className={cn(
-          "absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-transform",
-          checked ? "translate-x-5.5" : "translate-x-0.5",
+          "absolute left-[3px] top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow transition-transform",
+          checked ? "translate-x-[20px]" : "translate-x-0",
         )}
-        style={{ height: 18, width: 18 }}
       />
     </button>
   );

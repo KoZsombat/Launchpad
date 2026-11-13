@@ -10,6 +10,7 @@ import {
 import { Button, Field, Panel, inputClass } from "./ui";
 
 export interface AppConfigUpdate {
+  domain?: string | null;
   internalPort: number;
   healthPath: string;
   envVars: { key: string; value?: string; secret: boolean }[];
@@ -33,6 +34,7 @@ export function ConfigEditor({
   saving: boolean;
   onSave: (update: AppConfigUpdate) => void;
 }) {
+  const [domain, setDomain] = useState(app.domain ?? "");
   const [internalPort, setInternalPort] = useState(String(app.internalPort));
   const [healthPath, setHealthPath] = useState(app.healthPath);
   const [envRows, setEnvRows] = useState<EnvRowState[]>(
@@ -63,6 +65,7 @@ export function ConfigEditor({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const update: AppConfigUpdate = {
+      domain: domain.trim() || null,
       internalPort: Number(internalPort),
       healthPath: healthPath.trim() || "/",
       envVars: envRows
@@ -105,7 +108,45 @@ export function ConfigEditor({
           </Button>
         }
       >
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4">
+          <Field
+            label="Project domain"
+            hint={`Empty uses the panel default (${app.defaultDomain}). Use localhost for local tests.`}
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <div className="min-w-0 flex-1">
+                <input
+                  className={inputClass}
+                  value={domain}
+                  onChange={(event) => setDomain(event.target.value.toLowerCase())}
+                  placeholder={app.defaultDomain}
+                  spellCheck={false}
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setDomain("localhost")}
+              >
+                Use localhost
+              </Button>
+              {domain ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0"
+                  onClick={() => setDomain("")}
+                >
+                  Use default
+                </Button>
+              ) : null}
+            </div>
+          </Field>
+        </div>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Internal port">
             <input
               className={inputClass}

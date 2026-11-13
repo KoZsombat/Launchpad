@@ -41,8 +41,9 @@ export function DashboardPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Applications</h1>
           <p className="mt-1 text-sm text-muted">
-            Every container on the <span className="font-mono text-xs">web</span> network with a
-            Traefik route gets its own subdomain.
+            Every container or compose service on the{" "}
+            <span className="font-mono text-xs">web</span> network with a Traefik route gets its
+            own subdomain.
           </p>
         </div>
         <Link
@@ -73,7 +74,7 @@ export function DashboardPage() {
       ) : apps.length === 0 ? (
         <EmptyState
           title="No apps yet"
-          description="Deploy your first container from a Docker image or a GitHub repository."
+          description="Deploy your first container from an image, a GitHub repository or a docker-compose project."
           action={
             <Link
               to="/apps/new"
@@ -109,6 +110,11 @@ export function DashboardPage() {
                       className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted hover:text-accent"
                     >
                       {app.subdomain}
+                      {app.subdomains.length > 1 ? (
+                        <span className="text-[10px] text-muted">
+                          +{app.subdomains.length - 1}
+                        </span>
+                      ) : null}
                       <ExternalLink className="h-3 w-3 shrink-0" />
                     </a>
                   </div>
@@ -120,7 +126,11 @@ export function DashboardPage() {
                     {app.sourceType}
                   </span>
                   <span className="truncate font-mono">
-                    {app.sourceType === "image" ? app.imageRef : app.branch}
+                    {app.sourceType === "image"
+                      ? app.imageRef
+                      : app.sourceType === "compose"
+                        ? `${app.composeServices.filter((service) => service.expose).length} routed`
+                        : app.branch}
                   </span>
                 </div>
 
