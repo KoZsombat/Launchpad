@@ -421,11 +421,16 @@ Tests cover shared Zod validation, subdomain/reserved-name rules, multi-subdomai
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). Copyright (C) 2026 KoZsombat.
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), plus the attribution term in [NOTICE](NOTICE). Copyright (C) 2026 KoZsombat.
 
-Self-hosting, modifying and redistributing are allowed under AGPL terms. Two consequences worth knowing:
+What that means in practice:
 
-- If you modify the panel and let other users interact with it over a network, you must offer them the corresponding source.
-- A modified version with an interactive UI must display *Appropriate Legal Notices* (AGPL section 5d): a copyright notice, the absence of warranty, and how to view the license. In practice that puts the attribution on the app, not just in the repository.
+- **Use it however you like**, including commercially. Self-hosting, modifying and redistributing are allowed.
+- **Distributing it or a modified version?** Pass on the source under AGPL and keep the notices; state what you changed.
+- **Running a modified version for users over a network?** Those users must be offered the corresponding source (AGPL §13).
+- **Credit:** whenever you distribute or publish this program, or a work containing it — modified or not — keep `Based on Launchpad by KoZsombat — https://github.com/KoZsombat/Launchpad` in its visible legal notices (About page, footer, or equivalent). This is an additional term explicitly permitted by AGPL §7, so the project remains recognized as AGPL-3.0.
+- **No warranty.**
+
+Two honest limits: a private, unmodified self-host is not "conveying", so AGPL does not force an in-app credit for it (only a custom license could); and no trademark rights are granted, so forks must not imply endorsement.
 
 MIT and Apache-2.0 are the usual alternatives if you ever prefer permissive terms over copyleft.
