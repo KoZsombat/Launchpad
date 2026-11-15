@@ -76,7 +76,11 @@ async function openHostShell(ws: WebSocket, scope: ShellScope | null): Promise<S
   }
   if (scope?.workspace) {
     script.push(`mkdir -p -- ${shellQuote(scope.workspace)} 2>/dev/null || true`);
-    script.push(`cd -- ${shellQuote(scope.workspace)} 2>/dev/null || cd ~`);
+    script.push(
+      `cd -- ${shellQuote(scope.workspace)} 2>/dev/null || { printf '%s\\n' ${shellQuote(
+        `Launchpad: no access to ${scope.workspace} as this user; staying in the home directory.`,
+      )}; cd ~; }`,
+    );
   }
   script.push('exec "${SHELL:-/bin/sh}" -l');
 
