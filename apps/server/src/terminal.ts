@@ -7,8 +7,7 @@ import { auth } from "./auth";
 import { config } from "./config";
 import { getSshCredentials } from "./services/settings";
 import { requireAppRow } from "./services/apps";
-import { openAppShell, requireAppContainer, type AppShell } from "./docker/targets";
-import { sshShell } from "./lib/ssh";
+import { sshShell, type SshShell } from "./lib/ssh";
 
 const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("data"), data: z.string().max(65_536) }),
@@ -53,44 +52,38 @@ function shellHandlers(ws: WebSocket): {
   };
 }
 
-function handleHostConnection(ws: WebSocket): void {
-  bridgeShell(ws, async () => {
-    const credentials = getSshCredentials();
-    if (!credentials) {
-      throw new Error(
-        "SSH is not configured. Add a host, username and password or private key in Settings.",
-      );
-    }
-    const handlers = shellHandlers(ws);
-    return sshShell(credentials, {
-      cols: INITIAL_SIZE.cols,
-      rows: INITIAL_SIZE.rows,
-      onData: handlers.onData,
-      onClose: handlers.onExit,
-    });
+/** Opens the host shell; every app terminal shares it, scoped by the app page. */
+async function openHostShell(ws: WebSocket): Promise<SshShell> {
+  const credentials = getSshCredentials();
+  if (!credentials) {
+    throw new Error(
+      "SSH is not configured. Add a host, username and password or private key in Settings.",
+    );
+  }
+  const handlers = shellHandlers(ws);
+  return sshShell(credentials, {
+    cols: INITIAL_SIZE.cols,
+    rows: INITIAL_SIZE.rows,
+    onData: handlers.onData,
+    onClose: handlers.onExit,
   });
 }
 
-function handleAppConnection(ws: WebSocket, appId: string, containerParam: string | null): void {
+function handleHostConnection(ws: WebSocket): void {
+  bridgeShell(ws, () => openHostShell(ws));
+}
+
+function handleAppConnection(ws: WebSocket, appId: string): void {
   bridgeShell(ws, async () => {
-    const app = requireAppRow(appId);
-    let containerId = containerParam;
-    if (!containerId) {
-      if (app.sourceType === "compose") {
-        throw new Error("Choose a container to open a terminal for this compose project.");
-      }
-      containerId = app.containerId;
-    }
-    if (!containerId) throw new Error("This app has no running container yet.");
-    await requireAppContainer(app, containerId);
-    return openAppShell(app, containerId, INITIAL_SIZE, shellHandlers(ws));
+    requireAppRow(appId);
+    return openHostShell(ws);
   });
 }
 
 /** Bridges one websocket to a shell; the opener resolves once the shell is attached. */
-function bridgeShell(ws: WebSocket, open: () => Promise<AppShell>): void {
+function bridgeShell(ws: WebSocket, open: () => Promise<SshShell>): void {
   activeSockets.add(ws);
-  let shell: AppShell | null = null;
+  let shell: SshShell | null = null;
   let closed = false;
 
   const cleanup = (): void => {
@@ -173,7 +166,7 @@ export function attachTerminalServer(server: Server): void {
         wss.emit("connection", ws, req);
         const appId = appMatch?.[1];
         if (appId) {
-          handleAppConnection(ws, decodeURIComponent(appId), url.searchParams.get("container"));
+          handleAppConnection(ws, decodeURIComponent(appId));
         } else {
           handleHostConnection(ws);
         }

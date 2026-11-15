@@ -127,16 +127,6 @@ export interface AvailabilityResult {
   subdomainAvailable: boolean;
 }
 
-/** A container belonging to an app, as seen by the terminal and upload tools. */
-export interface AppContainer {
-  id: string;
-  name: string;
-  state: string;
-  image: string;
-  /** Compose service name when the container was created by a compose project. */
-  service: string | null;
-}
-
 export interface ComposeScanPort {
   container: number;
   protocol: "tcp" | "udp";

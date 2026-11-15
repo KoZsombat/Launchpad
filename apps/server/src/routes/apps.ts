@@ -18,7 +18,12 @@ import {
   serializeDeployment,
   serializeDeploymentDetail,
 } from "../services/deployments";
-import { getBaseDomain, getGithubToken, getUploadLimitMb } from "../services/settings";
+import {
+  getBaseDomain,
+  getGithubToken,
+  getSshCredentials,
+  getUploadLimitMb,
+} from "../services/settings";
 import { enqueueDeployment } from "../deploy/runner";
 import {
   restartContainer,
@@ -28,12 +33,8 @@ import {
   removeContainer,
   removeAppVolume,
 } from "../docker/containers";
-import {
-  listAppContainersForTarget,
-  requireAppContainer,
-  uploadAppFile,
-} from "../docker/targets";
-import { normalizeContainerDir, safeUploadName, stageUploadFile } from "../lib/tar";
+import { normalizeHostDir, safeUploadName } from "../lib/paths";
+import { sshUploadFile } from "../lib/ssh";
 import { scanCompose } from "../deploy/compose";
 import { fetchComposeFromRepo } from "../deploy/source";
 import { composeLifecycle, removeComposeProjectForApp } from "../deploy/compose-runner";
@@ -110,24 +111,16 @@ appsRouter.get("/apps/:id", (req, res) => {
   res.json({ app: toPublicApp(app, getBaseDomain()) });
 });
 
-appsRouter.get("/apps/:id/containers", async (req, res) => {
-  const app = requireAppRow(requireParam(req.params, "id"));
-  res.json({
-    containers: await listAppContainersForTarget(app),
-    uploadLimitMb: getUploadLimitMb(),
-  });
-});
-
 const uploadQuerySchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),
 });
 
-appsRouter.post("/apps/:id/containers/:containerId/files", async (req, res) => {
-  const app = requireAppRow(requireParam(req.params, "id"));
-  const containerId = requireParam(req.params, "containerId");
+/** Copies a file from the browser onto the host that runs the app, over SFTP. */
+appsRouter.post("/apps/:id/files", async (req, res) => {
+  requireAppRow(requireParam(req.params, "id"));
   const query = parseBody(uploadQuerySchema, req.query);
-  const targetDir = normalizeContainerDir(query.path);
+  const directory = normalizeHostDir(query.path);
   const fileName = safeUploadName(query.name);
   if (!req.is("application/octet-stream")) {
     throw new ApiError(415, "Send the file body as application/octet-stream.");
@@ -140,14 +133,22 @@ appsRouter.post("/apps/:id/containers/:containerId/files", async (req, res) => {
     throw new ApiError(413, `The file exceeds the ${limitMb} MB upload limit.`);
   }
 
-  await requireAppContainer(app, containerId);
-  const upload = await stageUploadFile(req, targetDir, fileName, maxBytes, `${limitMb} MB`);
-  try {
-    await uploadAppFile(app, containerId, upload.archive);
-  } finally {
-    await upload.cleanup();
+  const credentials = getSshCredentials();
+  if (!credentials) {
+    throw new ApiError(
+      409,
+      "SSH is not configured. Add the host, username and password or private key in Settings.",
+    );
   }
-  res.json({ ok: true, path: `${targetDir === "/" ? "" : targetDir}/${fileName}` });
+
+  await sshUploadFile(credentials, {
+    directory,
+    name: fileName,
+    source: req,
+    maxBytes,
+    limitLabel: `${limitMb} MB`,
+  });
+  res.json({ ok: true, path: `${directory === "/" ? "" : directory}/${fileName}` });
 });
 
 appsRouter.patch("/apps/:id", (req, res) => {

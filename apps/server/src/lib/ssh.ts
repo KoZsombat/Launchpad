@@ -1,6 +1,9 @@
-import { Client, type ClientChannel } from "ssh2";
-import type { Readable } from "node:stream";
+import { Client, type ClientChannel, type SFTPWrapper } from "ssh2";
+import path from "node:path";
+import { Transform, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { SshCredentials } from "../services/settings";
+import { ApiError } from "./errors";
 
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -48,7 +51,7 @@ function lineLogger(log?: (line: string) => void): {
 }
 
 export interface SshRunOptions {
-  input?: string | Buffer | Readable;
+  input?: string | Buffer;
   log?: (line: string) => void;
   timeoutMs?: number;
 }
@@ -99,15 +102,8 @@ export async function sshRun(
     });
     stream.on("error", (error: Error) => completion.reject(error));
 
-    const input = options.input;
-    if (input === undefined) {
-      stream.end();
-    } else if (typeof input === "string" || Buffer.isBuffer(input)) {
-      stream.end(input);
-    } else {
-      input.on("error", (error: Error) => completion.reject(error));
-      input.pipe(stream);
-    }
+    if (options.input !== undefined) stream.end(options.input);
+    else stream.end();
 
     if (options.timeoutMs && options.timeoutMs > 0) {
       timer = setTimeout(() => {
@@ -248,5 +244,76 @@ export async function sshShell(
   } catch (error) {
     client.end();
     throw error;
+  }
+}
+
+/** Creates `directory` (and parents) on the remote host over SFTP. */
+async function ensureRemoteDirectory(sftp: SFTPWrapper, directory: string): Promise<void> {
+  let current = "";
+  for (const segment of directory.split("/").filter(Boolean)) {
+    current += `/${segment}`;
+    await new Promise<void>((resolve, reject) => {
+      sftp.stat(current, (statError) => {
+        if (!statError) {
+          resolve();
+          return;
+        }
+        sftp.mkdir(current, (mkdirError) => (mkdirError ? reject(mkdirError) : resolve()));
+      });
+    });
+  }
+}
+
+export interface SshUploadOptions {
+  directory: string;
+  name: string;
+  source: Readable;
+  maxBytes: number;
+  limitLabel: string;
+}
+
+/**
+ * Streams a file to the host over SFTP. It is written under a temporary name and
+ * renamed into place, so an aborted or over-limit upload never truncates an
+ * existing file.
+ */
+export async function sshUploadFile(
+  credentials: SshCredentials,
+  options: SshUploadOptions,
+): Promise<void> {
+  const target = path.posix.join(options.directory, options.name);
+  const temporary = path.posix.join(options.directory, `.${options.name}.launchpad-part`);
+  const client = await connect(credentials);
+  let sftp: SFTPWrapper | null = null;
+  try {
+    sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
+      client.sftp((error, connection) => (error ? reject(error) : resolve(connection)));
+    });
+    const connection = sftp;
+    await ensureRemoteDirectory(connection, options.directory);
+
+    let received = 0;
+    const limiter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        received += chunk.length;
+        if (received > options.maxBytes) {
+          callback(new ApiError(413, `The file exceeds the ${options.limitLabel} upload limit.`));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(options.source, limiter, connection.createWriteStream(temporary));
+    await new Promise<void>((resolve, reject) => {
+      connection.rename(temporary, target, (error) => (error ? reject(error) : resolve()));
+    });
+  } catch (error) {
+    await new Promise<void>((resolve) => sftp?.unlink(temporary, () => resolve()));
+    if (error instanceof ApiError) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ApiError(502, `Upload to ${target} failed: ${detail}`);
+  } finally {
+    sftp?.end();
+    client.end();
   }
 }

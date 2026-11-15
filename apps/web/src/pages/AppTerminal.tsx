@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, PlugZap, Trash2, Upload } from "lucide-react";
-import type { AppContainer, PublicApp } from "@launchpad/shared";
+import type { PublicApp, SettingsView } from "@launchpad/shared";
 import { api, errorMessage } from "../lib/api";
 import { Button, Spinner, cn, inputClass } from "../components/ui";
 import {
@@ -11,17 +11,11 @@ import {
   type XtermSessionHandle,
 } from "../components/XtermSession";
 
-function containerLabel(container: AppContainer): string {
-  const name = container.service ? `${container.service} · ${container.name}` : container.name;
-  return container.state === "running" ? name : `${name} (${container.state})`;
-}
-
 export function AppTerminalPage() {
   const { id } = useParams<{ id: string }>();
   const appId = id ?? "";
   const terminalRef = useRef<XtermSessionHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sessionKey, setSessionKey] = useState(0);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
@@ -35,41 +29,23 @@ export function AppTerminalPage() {
     enabled: Boolean(appId),
   });
 
-  const containersQuery = useQuery({
-    queryKey: ["containers", appId],
-    queryFn: () =>
-      api<{ containers: AppContainer[]; uploadLimitMb: number }>(
-        `/api/apps/${appId}/containers`,
-      ),
-    enabled: Boolean(appId),
-    refetchInterval: 5_000,
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api<{ settings: SettingsView }>("/api/settings"),
   });
 
-  const containers = containersQuery.data?.containers ?? [];
-  const uploadLimitMb = containersQuery.data?.uploadLimitMb ?? 64;
-
-  useEffect(() => {
-    if (containers.length === 0) {
-      setSelectedId(null);
-      return;
-    }
-    setSelectedId((current) => {
-      if (current && containers.some((container) => container.id === current)) return current;
-      const running = containers.find((container) => container.state === "running");
-      return (running ?? containers[0])?.id ?? null;
-    });
-  }, [containersQuery.data]);
+  const settings = settingsQuery.data?.settings;
+  const uploadLimitMb = settings?.uploadLimitMb ?? 64;
 
   const upload = useMutation({
     mutationFn: async (file: File) => {
-      if (!selectedId) throw new Error("Choose a container first.");
       if (file.size > uploadLimitMb * 1024 * 1024) {
         throw new Error(`"${file.name}" exceeds the ${uploadLimitMb} MB limit set in Settings.`);
       }
       const response = await fetch(
-        `/api/apps/${appId}/containers/${selectedId}/files?path=${encodeURIComponent(
-          uploadDir,
-        )}&name=${encodeURIComponent(file.name)}`,
+        `/api/apps/${appId}/files?path=${encodeURIComponent(uploadDir)}&name=${encodeURIComponent(
+          file.name,
+        )}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/octet-stream" },
@@ -94,7 +70,6 @@ export function AppTerminalPage() {
     onError: (uploadFailure) => setUploadError(errorMessage(uploadFailure)),
   });
 
-  const selectedContainer = containers.find((container) => container.id === selectedId) ?? null;
   const statusLabel =
     status === "connected"
       ? "Connected"
@@ -137,36 +112,14 @@ export function AppTerminalPage() {
           <ArrowLeft className="h-3.5 w-3.5" />
           {app.name}
         </Link>
-        <span className="text-xs text-muted">
-          Container terminal
-          {app.deployTarget === "remote" ? " · via SSH" : ""}
-        </span>
+        <span className="text-xs text-muted">Host terminal</span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <select
-            value={selectedId ?? ""}
-            onChange={(event) => {
-              setSelectedId(event.target.value || null);
-              setSessionKey((value) => value + 1);
-              setNotice(null);
-              setUploadError(null);
-            }}
-            disabled={containers.length === 0}
-            aria-label="Container"
-            className={cn(inputClass, "h-8 w-auto max-w-72 px-2 py-1 text-xs")}
-          >
-            {containers.length === 0 ? <option value="">No containers</option> : null}
-            {containers.map((container) => (
-              <option key={container.id} value={container.id}>
-                {containerLabel(container)}
-              </option>
-            ))}
-          </select>
           <input
             value={uploadDir}
             onChange={(event) => setUploadDir(event.target.value)}
             aria-label="Upload destination directory"
             placeholder="/tmp"
-            className={cn(inputClass, "h-8 w-40 px-2 py-1 font-mono text-xs")}
+            className={cn(inputClass, "h-8 w-48 px-2 py-1 font-mono text-xs")}
           />
           <input
             ref={fileRef}
@@ -181,7 +134,7 @@ export function AppTerminalPage() {
           <Button
             size="sm"
             variant="secondary"
-            disabled={!selectedId || upload.isPending}
+            disabled={upload.isPending}
             onClick={() => fileRef.current?.click()}
           >
             <Upload className="h-3.5 w-3.5" />
@@ -191,11 +144,7 @@ export function AppTerminalPage() {
             <Trash2 className="h-3.5 w-3.5" />
             Clear
           </Button>
-          <Button
-            size="sm"
-            disabled={!selectedId}
-            onClick={() => setSessionKey((value) => value + 1)}
-          >
+          <Button size="sm" onClick={() => setSessionKey((value) => value + 1)}>
             <PlugZap className="h-3.5 w-3.5" />
             Reconnect
           </Button>
@@ -228,43 +177,35 @@ export function AppTerminalPage() {
                       : "bg-muted",
               )}
             />
-            <span className="text-sm font-medium">
-              {selectedContainer ? containerLabel(selectedContainer) : "No running container"}
-            </span>
+            <span className="text-sm font-medium">{app.name}</span>
             <span className="text-xs text-muted">· {statusLabel}</span>
           </div>
           <span className="ml-auto text-[11px] text-muted">
-            Uploads are extracted inside the container; max {uploadLimitMb} MB per file.
+            Uploads are written to the host; max {uploadLimitMb} MB per file.
           </span>
         </header>
 
         {error ? (
           <div className="border-b border-danger/30 bg-danger/10 px-4 py-2 text-xs text-danger">
             {error}
+            {error.includes("not configured") ? (
+              <span className="text-danger/80"> Configure SSH under Settings.</span>
+            ) : null}
           </div>
         ) : null}
 
-        {selectedId ? (
-          <XtermSession
-            key={`${selectedId}:${sessionKey}`}
-            ref={terminalRef}
-            url={`/api/terminal/apps/${appId}?container=${encodeURIComponent(selectedId)}`}
-            onStatus={setStatus}
-            onError={setError}
-          />
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted">
-            {containersQuery.isPending
-              ? "Looking for containers…"
-              : containersQuery.isError
-                ? errorMessage(containersQuery.error)
-                : "This app has no containers yet. Deploy it first, then reopen this terminal."}
-          </div>
-        )}
+        <XtermSession
+          key={sessionKey}
+          ref={terminalRef}
+          url={`/api/terminal/apps/${appId}`}
+          onStatus={setStatus}
+          onError={setError}
+        />
 
         <footer className="border-t border-edge px-4 py-1.5 text-[11px] text-muted">
-          Docker exec into {app.deployTarget === "remote" ? "the remote host" : "this host"} · files land
-          in the container filesystem, not on the panel.
+          SSH shell and SFTP uploads go to{" "}
+          <span className="font-mono">{settings?.sshHost ?? "the host in Settings"}</span>. Files land
+          on that host, not in the panel container.
         </footer>
       </div>
     </div>

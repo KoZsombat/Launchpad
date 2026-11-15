@@ -177,7 +177,7 @@ Deployment healthy. Traffic is now routed to the new container.
 ```
 
 4. Open `https://demo.example.com`. The wildcard DNS record and Traefik labels make it live immediately.
-5. Use the **Terminal** button on the app page for a shell inside the container and to upload files into it (see [Per-app container terminal](#per-app-container-terminal-and-file-upload)).
+5. Use the **Terminal** button on the app page for a shell on the host that runs the app and to upload files onto it (see [Per-app host terminal](#per-app-host-terminal-and-file-upload)).
 
 How deployments stay up during a redeploy:
 
@@ -278,20 +278,20 @@ SSH is optional. Projects deployed with the **local** target use the Docker sock
 
 The connection originates inside the panel container on the `web` network. The SSH host key is currently accepted without pinning; restrict the panel's network exposure and rely on Cloudflare Access.
 
-### Per-app container terminal and file upload
+### Per-app host terminal and file upload
 
-Every app also has its own terminal at **App page → Terminal** (running apps show a terminal icon on the dashboard card). This one does not use sshd or the SSH credentials: the panel runs `docker exec` into that app's container through the Docker socket, so it works without any SSH setup.
+Every app has one terminal at **App page → Terminal** (running apps also show a shortcut on the dashboard card). It opens an SSH shell on the host that runs the app, using the credentials from **Settings → Remote hosts**: the VM itself for local targets, the configured remote host for remote targets. It is intentionally one terminal per app, not per compose service — from there `docker`, `docker compose` and the app's directories are all reachable.
 
-- Compose projects show a container picker; choose the service to inspect.
-- The shell is `/bin/sh`. Images without a shell (distroless, scratch) cannot open a terminal, but uploading still works.
-- The upload control copies a local file into a directory inside the container (default `/tmp`). The per-file limit is set in **Settings → Container uploads** (default 64 MB, max 4096 MB). Uploads stream to a temporary file on the panel and are then extracted inside the container, so they are not held in memory. Files are written into the container filesystem, so mount a volume if they must survive a redeploy.
-- For apps whose target is a **separate host**, the panel runs `docker exec` on that host over the configured SSH connection instead of the local socket.
+- Requires `sshd` and SSH credentials. Without them the terminal reports that SSH is not configured; nothing is executed through the Docker socket.
+- Uploads: enter an absolute destination directory on that host (default `/tmp`) and pick a file. It is streamed over SFTP and renamed into place, so an interrupted or over-limit upload never truncates an existing file. The per-file limit lives in **Settings → Host uploads** (default 64 MB, max 4096 MB).
+- Compose stacks: inspect a single service from the same shell with `docker compose -p launchpad-<id> exec <service> sh`; there is deliberately no service picker.
 
 ```mermaid
 flowchart LR
-  browser[Browser] -->|WebSocket| panel[panel container]
-  panel -->|docker exec, local target| c1[app container]
-  panel -->|SSH + docker exec, remote target| host[remote host]
+  browser[Browser] -->|WebSocket shell| panel[panel container]
+  browser -->|SFTP upload via panel| panel
+  panel -->|SSH / SFTP| host[host running the app]
+  host --> containers[app containers]
 ```
 
 ## CI/CD for Launchpad itself

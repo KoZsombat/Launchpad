@@ -1,5 +1,4 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { AppContainer } from "@launchpad/shared";
 import { docker } from "./client";
 
 export interface VolumeMount {
@@ -101,20 +100,6 @@ export async function listAppContainers(appId: string): Promise<{ id: string; st
   return containers.map((container) => ({
     id: container.Id,
     state: container.State ?? "unknown",
-  }));
-}
-
-export async function listAppContainerDetails(appId: string): Promise<AppContainer[]> {
-  const containers = await docker.listContainers({
-    all: true,
-    filters: { label: [`launchpad.app=${appId}`] },
-  });
-  return containers.map((container) => ({
-    id: container.Id,
-    name: (container.Names?.[0] ?? container.Id.slice(0, 12)).replace(/^\//, ""),
-    state: container.State ?? "unknown",
-    image: container.Image ?? "",
-    service: container.Labels?.["com.docker.compose.service"] ?? null,
   }));
 }
 

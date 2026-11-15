@@ -231,12 +231,12 @@ export function SettingsPage() {
         </Panel>
 
         <Panel
-          title="Container uploads"
-          description="Maximum size of a single file copied from your computer into a running container from the app terminal."
+          title="Host uploads"
+          description="Maximum size of a single file copied from your computer onto the host that runs an app, from the app terminal."
         >
           <Field
             label="Max upload size (MB)"
-            hint="Uploads stream to a temp file on the panel and are then copied into the container, so large files need free space under /tmp."
+            hint="Uploads are streamed over SFTP straight to the host, so the file never sits in the panel's memory. Large files need free space at the destination."
           >
             <input
               className={inputClass}
