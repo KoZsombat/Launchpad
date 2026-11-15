@@ -1,0 +1,98 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-launchpad
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: image
+        name: Resolve image name
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: launchpad:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The VM updates itself via Watchtower, so never publish an image that
+      # has not answered /healthz at least once.
+      - name: Smoke test image
+        run: |
+          docker run -d --name launchpad-smoke -p 3999:3000 \
+            -e NODE_ENV=production \
+            -e PORT=3000 \
+            -e BASE_DOMAIN=example.com \
+            -e ADMIN_EMAIL=smoke@example.com \
+            -e ADMIN_PASSWORD=smoke-test-password \
+            -e BETTER_AUTH_SECRET=smoke-test-secret-at-least-32-characters \
+            -e BETTER_AUTH_URL=http://localhost:3999 \
+            -e ENCRYPTION_KEY=smoke-test-encryption-key-32-chars \
+            -e DATABASE_PATH=/data/launchpad.db \
+            -e DATA_DIR=/data \
+            launchpad:smoke
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:3999/healthz >/dev/null 2>&1; then
+              echo "Image is healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Image never became healthy." >&2
+          docker logs launchpad-smoke >&2 || true
+          exit 1
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          docker tag launchpad:smoke "$IMAGE:$GITHUB_SHA"
+          docker tag launchpad:smoke "$IMAGE:latest"
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"

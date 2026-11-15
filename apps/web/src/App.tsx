@@ -9,6 +9,7 @@ import { NewAppPage } from "./pages/NewApp";
 import { AppDetailPage } from "./pages/AppDetail";
 import { SettingsPage } from "./pages/Settings";
 import { TerminalPage } from "./pages/Terminal";
+import { AppTerminalPage } from "./pages/AppTerminal";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { data: session, isPending } = authClient.useSession();
@@ -56,6 +57,14 @@ export default function App() {
         element={
           <Protected>
             <AppDetailPage />
+          </Protected>
+        }
+      />
+      <Route
+        path="/apps/:id/terminal"
+        element={
+          <Protected>
+            <AppTerminalPage />
           </Protected>
         }
       />

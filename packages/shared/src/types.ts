@@ -95,6 +95,8 @@ export interface SettingsView {
   sshAuthMethod: "password" | "key" | null;
   sshPasswordSet: boolean;
   sshPrivateKeySet: boolean;
+  /** Maximum size of a single file uploaded into a container from the terminal. */
+  uploadLimitMb: number;
 }
 
 export interface CicdInfo {
@@ -123,6 +125,16 @@ export interface GithubPushInfo {
 export interface AvailabilityResult {
   nameAvailable: boolean;
   subdomainAvailable: boolean;
+}
+
+/** A container belonging to an app, as seen by the terminal and upload tools. */
+export interface AppContainer {
+  id: string;
+  name: string;
+  state: string;
+  image: string;
+  /** Compose service name when the container was created by a compose project. */
+  service: string | null;
 }
 
 export interface ComposeScanPort {

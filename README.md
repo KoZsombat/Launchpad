@@ -35,6 +35,8 @@ apps/web           React + Vite dashboard and xterm.js SSH terminal
 packages/shared    Zod schemas, shared types, Traefik label builder, deployment state machine
 Dockerfile         Single production image (API + built React app)
 docker-compose.yml cloudflared + Traefik + launchpad on the external `web` network
+docker-compose.deploy.yml  VM override: GHCR image + Watchtower self-updates
+.github/workflows  CI (typecheck, tests) and Deploy (build, smoke test, GHCR push)
 .env.example       Required environment variables
 ```
 
@@ -175,6 +177,7 @@ Deployment healthy. Traffic is now routed to the new container.
 ```
 
 4. Open `https://demo.example.com`. The wildcard DNS record and Traefik labels make it live immediately.
+5. Use the **Terminal** button on the app page for a shell inside the container and to upload files into it (see [Per-app container terminal](#per-app-container-terminal-and-file-upload)).
 
 How deployments stay up during a redeploy:
 
@@ -274,6 +277,41 @@ SSH is optional. Projects deployed with the **local** target use the Docker sock
 3. Use the **GUI / CLI** switch in the sidebar (or `Ctrl + \``) to move between the dashboard and the terminal.
 
 The connection originates inside the panel container on the `web` network. The SSH host key is currently accepted without pinning; restrict the panel's network exposure and rely on Cloudflare Access.
+
+### Per-app container terminal and file upload
+
+Every app also has its own terminal at **App page → Terminal** (running apps show a terminal icon on the dashboard card). This one does not use sshd or the SSH credentials: the panel runs `docker exec` into that app's container through the Docker socket, so it works without any SSH setup.
+
+- Compose projects show a container picker; choose the service to inspect.
+- The shell is `/bin/sh`. Images without a shell (distroless, scratch) cannot open a terminal, but uploading still works.
+- The upload control copies a local file into a directory inside the container (default `/tmp`). The per-file limit is set in **Settings → Container uploads** (default 64 MB, max 4096 MB). Uploads stream to a temporary file on the panel and are then extracted inside the container, so they are not held in memory. Files are written into the container filesystem, so mount a volume if they must survive a redeploy.
+- For apps whose target is a **separate host**, the panel runs `docker exec` on that host over the configured SSH connection instead of the local socket.
+
+```mermaid
+flowchart LR
+  browser[Browser] -->|WebSocket| panel[panel container]
+  panel -->|docker exec, local target| c1[app container]
+  panel -->|SSH + docker exec, remote target| host[remote host]
+```
+
+## CI/CD for Launchpad itself
+
+`.github/workflows/ci.yml` runs typecheck and tests on every push and pull request. `.github/workflows/deploy.yml` runs on `main`: it builds the Docker image, boots it once and waits for `/healthz`, and only then pushes `ghcr.io/kozsombat/launchpad:<sha>` and `:latest`. An image that fails the smoke test never reaches the VM.
+
+The VM pulls releases itself with Watchtower, so nothing has to be exposed to the internet and no deploy SSH key is needed:
+
+1. On the VM, in the repository checkout, pick up the new compose files: `git pull`.
+2. Make the package pullable:
+   - **Public package:** GitHub → your profile → Packages → `launchpad` → Package settings → Change visibility → Public.
+   - **Private package:** run `docker login ghcr.io -u KoZsombat` once on the VM with a PAT that has `read:packages`, then uncomment the `/root/.docker/config.json:/config.json` mount in `docker-compose.deploy.yml`.
+3. Start the deploy stack once so the panel runs the published image instead of a local build:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml pull launchpad
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d --no-build
+```
+
+From then on, every push to `main` is built, smoke-tested, pushed, and picked up by Watchtower within about a minute (`WATCHTOWER_POLL_INTERVAL`). `.env` and `data/` are untouched by updates. Watchtower has no rollback: if a release is bad after the smoke test, revert the commit or re-tag a known-good image.
 
 ## Local development
 

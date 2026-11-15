@@ -482,6 +482,7 @@ export const settingsSchema = z.object({
   sshAuthMethod: z.enum(["password", "key"]).nullable().optional(),
   sshPassword: z.string().max(4096).nullable().optional(),
   sshPrivateKey: z.string().max(20_000).nullable().optional(),
+  uploadLimitMb: z.number().int().min(1).max(4096).optional(),
 });
 
 export const changePasswordSchema = z.object({

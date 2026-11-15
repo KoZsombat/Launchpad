@@ -27,6 +27,10 @@ export function getPanelUrl(): string {
   return config.panelUrl;
 }
 
+export function getUploadLimitMb(): number {
+  return getSettingsRow().uploadLimitMb;
+}
+
 export function getSettingsView(): SettingsView {
   const row = getSettingsRow();
   return {
@@ -41,6 +45,7 @@ export function getSettingsView(): SettingsView {
     sshAuthMethod: row.sshAuthMethod,
     sshPasswordSet: Boolean(row.sshPasswordEnc),
     sshPrivateKeySet: Boolean(row.sshPrivateKeyEnc),
+    uploadLimitMb: row.uploadLimitMb,
   };
 }
 
@@ -55,6 +60,7 @@ export interface SettingsUpdate {
   sshAuthMethod?: "password" | "key" | null;
   sshPassword?: string | null;
   sshPrivateKey?: string | null;
+  uploadLimitMb?: number;
 }
 
 export function updateSettings(input: SettingsUpdate): SettingsView {
@@ -87,6 +93,7 @@ export function updateSettings(input: SettingsUpdate): SettingsView {
       input.sshPrivateKey === undefined
         ? current.sshPrivateKeyEnc
         : encryptOptional(input.sshPrivateKey),
+    uploadLimitMb: input.uploadLimitMb ?? current.uploadLimitMb,
     updatedAt: new Date(),
   };
   db.update(settings).set(next).where(eq(settings.id, SETTINGS_ID)).run();

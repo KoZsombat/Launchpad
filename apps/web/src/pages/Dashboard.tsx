@@ -6,6 +6,7 @@ import {
   Plus,
   RotateCw,
   Square,
+  SquareTerminal,
   TerminalSquare,
 } from "lucide-react";
 import type { PublicApp } from "@launchpad/shared";
@@ -170,6 +171,16 @@ export function DashboardPage() {
                       Stop
                     </button>
                   )}
+                  {app.status === "running" ? (
+                    <Link
+                      to={`/apps/${app.id}/terminal`}
+                      title={`Open terminal for ${app.name}`}
+                      aria-label={`Open terminal for ${app.name}`}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-muted transition hover:bg-panel-2 hover:text-ink"
+                    >
+                      <SquareTerminal className="h-3.5 w-3.5" />
+                    </Link>
+                  ) : null}
                   <Link
                     to={`/apps/${app.id}`}
                     className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted transition hover:bg-panel-2 hover:text-ink"

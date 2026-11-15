@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `upload_limit_mb` integer DEFAULT 64 NOT NULL;

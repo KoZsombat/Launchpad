@@ -6,6 +6,9 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+/** Single-file limit for the app terminal uploads; configurable in Settings. */
+export const DEFAULT_UPLOAD_LIMIT_MB = 64;
+
 /** Better Auth core tables (email + password, single user). */
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
@@ -175,6 +178,8 @@ export const settings = sqliteTable("settings", {
   sshAuthMethod: text("ssh_auth_method", { enum: ["password", "key"] }),
   sshPasswordEnc: text("ssh_password_enc"),
   sshPrivateKeyEnc: text("ssh_private_key_enc"),
+
+  uploadLimitMb: integer("upload_limit_mb").notNull().default(DEFAULT_UPLOAD_LIMIT_MB),
 
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

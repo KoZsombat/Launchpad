@@ -8,6 +8,7 @@ import {
   Play,
   RotateCw,
   Square,
+  SquareTerminal,
   Trash2,
   X,
 } from "lucide-react";
@@ -238,6 +239,13 @@ export function AppDetailPage() {
               Stop
             </Button>
           )}
+          <Link
+            to={`/apps/${appId}/terminal`}
+            className="inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-edge bg-panel-2 px-3 text-xs font-medium text-ink transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            <SquareTerminal className="h-3.5 w-3.5" />
+            Terminal
+          </Link>
           <Button size="sm" variant="danger" onClick={() => setDeleteOpen(true)}>
             <Trash2 className="h-3.5 w-3.5" />
             Delete

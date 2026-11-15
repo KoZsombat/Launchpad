@@ -18,7 +18,7 @@ import {
   serializeDeployment,
   serializeDeploymentDetail,
 } from "../services/deployments";
-import { getBaseDomain, getGithubToken } from "../services/settings";
+import { getBaseDomain, getGithubToken, getUploadLimitMb } from "../services/settings";
 import { enqueueDeployment } from "../deploy/runner";
 import {
   restartContainer,
@@ -28,6 +28,12 @@ import {
   removeContainer,
   removeAppVolume,
 } from "../docker/containers";
+import {
+  listAppContainersForTarget,
+  requireAppContainer,
+  uploadAppFile,
+} from "../docker/targets";
+import { normalizeContainerDir, safeUploadName, stageUploadFile } from "../lib/tar";
 import { scanCompose } from "../deploy/compose";
 import { fetchComposeFromRepo } from "../deploy/source";
 import { composeLifecycle, removeComposeProjectForApp } from "../deploy/compose-runner";
@@ -102,6 +108,46 @@ function automaticRedeployOptions(app: AppRow): { imageTag?: string; commitSha?:
 appsRouter.get("/apps/:id", (req, res) => {
   const app = requireAppRow(requireParam(req.params, "id"));
   res.json({ app: toPublicApp(app, getBaseDomain()) });
+});
+
+appsRouter.get("/apps/:id/containers", async (req, res) => {
+  const app = requireAppRow(requireParam(req.params, "id"));
+  res.json({
+    containers: await listAppContainersForTarget(app),
+    uploadLimitMb: getUploadLimitMb(),
+  });
+});
+
+const uploadQuerySchema = z.object({
+  path: z.string().min(1),
+  name: z.string().min(1),
+});
+
+appsRouter.post("/apps/:id/containers/:containerId/files", async (req, res) => {
+  const app = requireAppRow(requireParam(req.params, "id"));
+  const containerId = requireParam(req.params, "containerId");
+  const query = parseBody(uploadQuerySchema, req.query);
+  const targetDir = normalizeContainerDir(query.path);
+  const fileName = safeUploadName(query.name);
+  if (!req.is("application/octet-stream")) {
+    throw new ApiError(415, "Send the file body as application/octet-stream.");
+  }
+
+  const limitMb = getUploadLimitMb();
+  const maxBytes = limitMb * 1024 * 1024;
+  const declared = Number(req.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new ApiError(413, `The file exceeds the ${limitMb} MB upload limit.`);
+  }
+
+  await requireAppContainer(app, containerId);
+  const upload = await stageUploadFile(req, targetDir, fileName, maxBytes, `${limitMb} MB`);
+  try {
+    await uploadAppFile(app, containerId, upload.archive);
+  } finally {
+    await upload.cleanup();
+  }
+  res.json({ ok: true, path: `${targetDir === "/" ? "" : targetDir}/${fileName}` });
 });
 
 appsRouter.patch("/apps/:id", (req, res) => {

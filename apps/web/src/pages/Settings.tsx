@@ -18,6 +18,7 @@ interface SettingsFormState {
   sshAuthMethod: "password" | "key";
   sshPassword: string;
   sshPrivateKey: string;
+  uploadLimitMb: string;
 }
 
 const emptyForm: SettingsFormState = {
@@ -31,6 +32,7 @@ const emptyForm: SettingsFormState = {
   sshAuthMethod: "password",
   sshPassword: "",
   sshPrivateKey: "",
+  uploadLimitMb: "64",
 };
 
 export function SettingsPage() {
@@ -65,6 +67,7 @@ export function SettingsPage() {
       sshAuthMethod: settings.sshAuthMethod ?? "password",
       sshPassword: "",
       sshPrivateKey: "",
+      uploadLimitMb: String(settings.uploadLimitMb),
     });
     setLoaded(true);
   }, [settings, loaded]);
@@ -80,6 +83,7 @@ export function SettingsPage() {
         sshPort: form.sshPort ? Number(form.sshPort) : null,
         sshUsername: form.sshUsername || null,
         sshAuthMethod: form.sshAuthMethod,
+        uploadLimitMb: Number(form.uploadLimitMb) || undefined,
         ...(form.sshPassword ? { sshPassword: form.sshPassword } : {}),
         ...(form.sshPrivateKey ? { sshPrivateKey: form.sshPrivateKey } : {}),
       }),
@@ -224,6 +228,27 @@ export function SettingsPage() {
               />
             </Field>
           </div>
+        </Panel>
+
+        <Panel
+          title="Container uploads"
+          description="Maximum size of a single file copied from your computer into a running container from the app terminal."
+        >
+          <Field
+            label="Max upload size (MB)"
+            hint="Uploads stream to a temp file on the panel and are then copied into the container, so large files need free space under /tmp."
+          >
+            <input
+              className={inputClass}
+              type="number"
+              min={1}
+              max={4096}
+              value={form.uploadLimitMb}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, uploadLimitMb: event.target.value }))
+              }
+            />
+          </Field>
         </Panel>
 
         <Panel

@@ -1,4 +1,5 @@
 import { Client, type ClientChannel } from "ssh2";
+import type { Readable } from "node:stream";
 import type { SshCredentials } from "../services/settings";
 
 export function shellQuote(value: string): string {
@@ -47,7 +48,7 @@ function lineLogger(log?: (line: string) => void): {
 }
 
 export interface SshRunOptions {
-  input?: string;
+  input?: string | Buffer | Readable;
   log?: (line: string) => void;
   timeoutMs?: number;
 }
@@ -98,8 +99,15 @@ export async function sshRun(
     });
     stream.on("error", (error: Error) => completion.reject(error));
 
-    if (options.input !== undefined) stream.end(options.input);
-    else stream.end();
+    const input = options.input;
+    if (input === undefined) {
+      stream.end();
+    } else if (typeof input === "string" || Buffer.isBuffer(input)) {
+      stream.end(input);
+    } else {
+      input.on("error", (error: Error) => completion.reject(error));
+      input.pipe(stream);
+    }
 
     if (options.timeoutMs && options.timeoutMs > 0) {
       timer = setTimeout(() => {
@@ -163,4 +171,82 @@ export async function sshStream(
     }
     client.end();
   };
+}
+
+export interface SshShell {
+  write: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  close: () => void;
+}
+
+export interface SshShellOptions {
+  cols: number;
+  rows: number;
+  term?: string;
+  /** Runs this command under a PTY instead of the account's login shell. */
+  command?: string;
+  onData: (chunk: Buffer) => void;
+  onClose: () => void;
+}
+
+/** Opens an interactive shell (or a single PTY command) over SSH. */
+export async function sshShell(
+  credentials: SshCredentials,
+  options: SshShellOptions,
+): Promise<SshShell> {
+  const client = await connect(credentials);
+  const pty = {
+    term: options.term ?? "xterm-256color",
+    cols: options.cols,
+    rows: options.rows,
+    width: options.cols * 8,
+    height: options.rows * 16,
+  };
+  const opened = Promise.withResolvers<ClientChannel>();
+  const onChannel = (error: Error | undefined, channel: ClientChannel): void => {
+    if (error) {
+      client.end();
+      opened.reject(error);
+    } else {
+      opened.resolve(channel);
+    }
+  };
+  try {
+    if (options.command) client.exec(options.command, { pty }, onChannel);
+    else client.shell(pty, onChannel);
+    const channel = await opened.promise;
+
+    let closed = false;
+    const finish = (): void => {
+      if (closed) return;
+      closed = true;
+      client.end();
+      options.onClose();
+    };
+
+    channel.on("data", options.onData);
+    channel.stderr.on("data", options.onData);
+    channel.on("close", finish);
+    channel.on("error", finish);
+
+    return {
+      write(data) {
+        if (!closed) channel.write(data);
+      },
+      resize(cols, rows) {
+        if (!closed) channel.setWindow(rows, cols, 0, 0);
+      },
+      close() {
+        try {
+          channel.close();
+        } catch {
+          // Channel may already be closed.
+        }
+        finish();
+      },
+    };
+  } catch (error) {
+    client.end();
+    throw error;
+  }
 }
