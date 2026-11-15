@@ -4,7 +4,7 @@ import path from "node:path";
 import { config } from "../config";
 import { docker } from "../docker/client";
 import { containerIdFromCgroup } from "../lib/container-id";
-import { dataDirHostPath } from "../lib/mounts";
+import { dataDirFromMountinfo, dataDirHostPath } from "../lib/mounts";
 import type { AppRow } from "../db/schema";
 
 let hostDataDirPromise: Promise<string | null> | null = null;
@@ -31,6 +31,17 @@ async function detectHostDataDir(): Promise<string | null> {
     } catch {
       // Try the next candidate.
     }
+  }
+  try {
+    // With a private cgroup namespace and an overridden hostname, the mount table
+    // still records the host source of the data bind mount.
+    const fromMountinfo = dataDirFromMountinfo(
+      await readFile("/proc/self/mountinfo", "utf8"),
+      config.dataDir,
+    );
+    if (fromMountinfo) return fromMountinfo;
+  } catch {
+    // Not Linux, or mountinfo is unavailable.
   }
   console.warn(
     `Launchpad: could not resolve the host path of ${config.dataDir}; app terminals start in the SSH user's home. Set HOST_DATA_DIR to fix this.`,
