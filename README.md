@@ -418,3 +418,9 @@ Tests cover shared Zod validation, subdomain/reserved-name rules, multi-subdomai
 | Compose service is not reachable | The service must be published, have a subdomain, listen on the configured container port, and (remote targets) be behind a Traefik instance on that host. |
 | Compose deploy fails on missing variables | Fill every required `${VAR}` under the project's compose variables or per-service environment overrides. |
 | SSE log stream stalls behind a proxy | Responses set `X-Accel-Buffering: no`; ensure no additional buffering proxy is in front of Traefik. |
+
+## License
+
+Source-available under the **Launchpad Attribution License** (MIT plus an attribution requirement), see [LICENSE](LICENSE).
+
+In short: use it, modify it, self-host it, fork it — but any deployment that is made available to end users must show a visible "Based on Launchpad by KoZsombat" attribution in the app UI (About page, footer or similar) and state the same attribution in that project's README. This is a custom license: GitHub reports it as `Other`, it is not OSI-approved, and the extra condition makes it incompatible with GPL/AGPL-licensed derivatives.
