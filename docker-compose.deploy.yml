@@ -10,15 +10,15 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 
+  # containrrr/watchtower 1.7.1 speaks Docker API 1.25 and is rejected by Docker
+  # 25+ ("client version 1.25 is too old"), so use the maintained fork.
   watchtower:
-    image: containrrr/watchtower:1.7.1
+    image: nickfedor/watchtower:1.24.0
     restart: unless-stopped
-    environment:
-      # Only containers labelled watchtower.enable are touched (the panel itself).
-      WATCHTOWER_LABEL_ENABLE: "true"
-      WATCHTOWER_POLL_INTERVAL: "60"
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_ROLLING_RESTART: "true"
+    command:
+      - --label-enable
+      - --cleanup
+      - --interval=60
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Private GHCR package: run `docker login ghcr.io` on the host, then mount
