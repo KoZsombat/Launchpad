@@ -1,20 +1,41 @@
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { config } from "../config";
 import { docker } from "../docker/client";
-import type { AppRow } from "../db/schema";
+import { containerIdFromCgroup } from "../lib/container-id";
 import { dataDirHostPath } from "../lib/mounts";
+import type { AppRow } from "../db/schema";
 
 let hostDataDirPromise: Promise<string | null> | null = null;
 
-async function detectHostDataDir(): Promise<string | null> {
+/** Candidate identifiers for the panel's own container. */
+async function selfCandidates(): Promise<string[]> {
+  const candidates = [os.hostname()];
   try {
-    // The panel runs in a container whose hostname defaults to its container id.
-    const info = await docker.getContainer(os.hostname()).inspect();
-    return dataDirHostPath(info.Mounts ?? [], config.dataDir);
+    // Compose may set the hostname to the service name, so fall back to the cgroup id.
+    const fromCgroup = containerIdFromCgroup(await readFile("/proc/self/cgroup", "utf8"));
+    if (fromCgroup && !candidates.includes(fromCgroup)) candidates.push(fromCgroup);
   } catch {
-    return null;
+    // Not a container, or cgroups are unavailable.
   }
+  return candidates;
+}
+
+async function detectHostDataDir(): Promise<string | null> {
+  for (const candidate of await selfCandidates()) {
+    try {
+      const info = await docker.getContainer(candidate).inspect();
+      const source = dataDirHostPath(info.Mounts ?? [], config.dataDir);
+      if (source) return source;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  console.warn(
+    `Launchpad: could not resolve the host path of ${config.dataDir}; app terminals start in the SSH user's home. Set HOST_DATA_DIR to fix this.`,
+  );
+  return null;
 }
 
 /**
