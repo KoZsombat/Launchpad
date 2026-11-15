@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, PlugZap, Trash2, Upload } from "lucide-react";
-import type { PublicApp, SettingsView } from "@launchpad/shared";
+import type { PublicApp } from "@launchpad/shared";
 import { api, errorMessage } from "../lib/api";
 import { Button, Spinner, cn, inputClass } from "../components/ui";
 import {
@@ -19,7 +19,7 @@ export function AppTerminalPage() {
   const [sessionKey, setSessionKey] = useState(0);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
-  const [uploadDir, setUploadDir] = useState("/tmp");
+  const [uploadDirOverride, setUploadDirOverride] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -29,13 +29,19 @@ export function AppTerminalPage() {
     enabled: Boolean(appId),
   });
 
-  const settingsQuery = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => api<{ settings: SettingsView }>("/api/settings"),
+  const workspaceQuery = useQuery({
+    queryKey: ["workspace", appId],
+    queryFn: () =>
+      api<{ workspace: string | null; uploadLimitMb: number; sshHost: string | null }>(
+        `/api/apps/${appId}/workspace`,
+      ),
+    enabled: Boolean(appId),
   });
 
-  const settings = settingsQuery.data?.settings;
-  const uploadLimitMb = settings?.uploadLimitMb ?? 64;
+  const workspace = workspaceQuery.data?.workspace ?? null;
+  const uploadLimitMb = workspaceQuery.data?.uploadLimitMb ?? 64;
+  const sshHost = workspaceQuery.data?.sshHost ?? null;
+  const uploadDir = uploadDirOverride ?? workspace ?? "/tmp";
 
   const upload = useMutation({
     mutationFn: async (file: File) => {
@@ -116,9 +122,9 @@ export function AppTerminalPage() {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <input
             value={uploadDir}
-            onChange={(event) => setUploadDir(event.target.value)}
+            onChange={(event) => setUploadDirOverride(event.target.value)}
             aria-label="Upload destination directory"
-            placeholder="/tmp"
+            placeholder={workspace ?? "/tmp"}
             className={cn(inputClass, "h-8 w-48 px-2 py-1 font-mono text-xs")}
           />
           <input
@@ -204,8 +210,14 @@ export function AppTerminalPage() {
 
         <footer className="border-t border-edge px-4 py-1.5 text-[11px] text-muted">
           SSH shell and SFTP uploads go to{" "}
-          <span className="font-mono">{settings?.sshHost ?? "the host in Settings"}</span>. Files land
-          on that host, not in the panel container.
+          <span className="font-mono">{sshHost ?? "the host in Settings"}</span>.{" "}
+          {workspace ? (
+            <>
+              The shell starts in <span className="font-mono">{workspace}</span>.
+            </>
+          ) : (
+            "The shell starts in the SSH user's home directory."
+          )}
         </footer>
       </div>
     </div>

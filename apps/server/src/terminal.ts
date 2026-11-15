@@ -7,7 +7,8 @@ import { auth } from "./auth";
 import { config } from "./config";
 import { getSshCredentials } from "./services/settings";
 import { requireAppRow } from "./services/apps";
-import { sshShell, type SshShell } from "./lib/ssh";
+import { appWorkspacePath } from "./services/workspace";
+import { shellQuote, sshShell, type SshShell } from "./lib/ssh";
 
 const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("data"), data: z.string().max(65_536) }),
@@ -52,8 +53,13 @@ function shellHandlers(ws: WebSocket): {
   };
 }
 
-/** Opens the host shell; every app terminal shares it, scoped by the app page. */
-async function openHostShell(ws: WebSocket): Promise<SshShell> {
+export interface ShellScope {
+  label: string;
+  workspace: string | null;
+}
+
+/** Opens the host shell; app terminals start in that app's workspace. */
+async function openHostShell(ws: WebSocket, scope: ShellScope | null): Promise<SshShell> {
   const credentials = getSshCredentials();
   if (!credentials) {
     throw new Error(
@@ -61,22 +67,37 @@ async function openHostShell(ws: WebSocket): Promise<SshShell> {
     );
   }
   const handlers = shellHandlers(ws);
+  const script: string[] = [];
+  if (scope) {
+    const heading = scope.workspace
+      ? `Launchpad · ${scope.label} · ${scope.workspace}`
+      : `Launchpad · ${scope.label}`;
+    script.push(`printf '%s\\n' ${shellQuote(heading)}`);
+  }
+  if (scope?.workspace) {
+    script.push(`mkdir -p -- ${shellQuote(scope.workspace)} 2>/dev/null || true`);
+    script.push(`cd -- ${shellQuote(scope.workspace)} 2>/dev/null || cd ~`);
+  }
+  script.push('exec "${SHELL:-/bin/sh}" -l');
+
   return sshShell(credentials, {
     cols: INITIAL_SIZE.cols,
     rows: INITIAL_SIZE.rows,
+    command: script.join("; "),
     onData: handlers.onData,
     onClose: handlers.onExit,
   });
 }
 
 function handleHostConnection(ws: WebSocket): void {
-  bridgeShell(ws, () => openHostShell(ws));
+  bridgeShell(ws, () => openHostShell(ws, null));
 }
 
 function handleAppConnection(ws: WebSocket, appId: string): void {
   bridgeShell(ws, async () => {
-    requireAppRow(appId);
-    return openHostShell(ws);
+    const app = requireAppRow(appId);
+    const workspace = await appWorkspacePath(app);
+    return openHostShell(ws, { label: app.name, workspace });
   });
 }
 

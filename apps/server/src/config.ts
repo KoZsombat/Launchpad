@@ -28,6 +28,7 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().min(16, "ENCRYPTION_KEY must be at least 16 characters"),
   DATABASE_PATH: z.string().optional(),
   DATA_DIR: z.string().optional(),
+  HOST_DATA_DIR: z.string().optional(),
   MIGRATIONS_DIR: z.string().optional(),
   WEB_DIST: z.string().optional(),
   DOCKER_NETWORK: z.string().trim().min(1).default("web"),
@@ -62,6 +63,8 @@ export const config = {
   betterAuthUrl: env.BETTER_AUTH_URL.replace(/\/$/, ""),
   encryptionKey: env.ENCRYPTION_KEY,
   dataDir,
+  /** Host path of the data volume; auto-detected at runtime when unset. */
+  hostDataDir: env.HOST_DATA_DIR ? env.HOST_DATA_DIR.replace(/\/+$/, "") : null,
   reposDir: path.join(dataDir, "repos"),
   databasePath: path.resolve(env.DATABASE_PATH ?? path.join(dataDir, "launchpad.db")),
   migrationsDir: path.resolve(env.MIGRATIONS_DIR ?? path.join(process.cwd(), "drizzle")),

@@ -304,9 +304,7 @@ export async function sshUploadFile(
       },
     });
     await pipeline(options.source, limiter, connection.createWriteStream(temporary));
-    await new Promise<void>((resolve, reject) => {
-      connection.rename(temporary, target, (error) => (error ? reject(error) : resolve()));
-    });
+    await renameOverwrite(connection, temporary, target);
   } catch (error) {
     await new Promise<void>((resolve) => sftp?.unlink(temporary, () => resolve()));
     if (error instanceof ApiError) throw error;
@@ -316,4 +314,28 @@ export async function sshUploadFile(
     sftp?.end();
     client.end();
   }
+}
+
+/** Renames over an existing file; plain SFTP rename refuses to replace targets. */
+async function renameOverwrite(sftp: SFTPWrapper, from: string, to: string): Promise<void> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      sftp.ext_openssh_rename(from, to, (error) => (error ? reject(error) : resolve()));
+    });
+    return;
+  } catch {
+    // Server lacks the OpenSSH extension; fall through to the portable path.
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      sftp.rename(from, to, (error) => (error ? reject(error) : resolve()));
+    });
+    return;
+  } catch {
+    // Target exists on servers with strict rename semantics; replace it.
+  }
+  await new Promise<void>((resolve) => sftp.unlink(to, () => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    sftp.rename(from, to, (error) => (error ? reject(error) : resolve()));
+  });
 }

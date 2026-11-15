@@ -283,8 +283,11 @@ The connection originates inside the panel container on the `web` network. The S
 Every app has one terminal at **App page → Terminal** (running apps also show a shortcut on the dashboard card). It opens an SSH shell on the host that runs the app, using the credentials from **Settings → Remote hosts**: the VM itself for local targets, the configured remote host for remote targets. It is intentionally one terminal per app, not per compose service — from there `docker`, `docker compose` and the app's directories are all reachable.
 
 - Requires `sshd` and SSH credentials. Without them the terminal reports that SSH is not configured; nothing is executed through the Docker socket.
-- Uploads: enter an absolute destination directory on that host (default `/tmp`) and pick a file. It is streamed over SFTP and renamed into place, so an interrupted or over-limit upload never truncates an existing file. The per-file limit lives in **Settings → Host uploads** (default 64 MB, max 4096 MB).
+- The shell starts in the app's workspace on the host: `<host data dir>/repos/<app id>`, the same directory the panel uses for that app's repository clone. The host data dir is read from the panel container's `/data` mount; set `HOST_DATA_DIR` if the panel is not running from the compose stack. Files uploaded here are the app's own working files; the SSH user must be able to write them (use the same user that owns `data/`, or root).
+- Uploads: the destination defaults to that workspace (default `/tmp` when the workspace is unknown) and can be changed per upload. Files are streamed over SFTP and renamed into place, so an interrupted or over-limit upload never truncates an existing file. The per-file limit lives in **Settings → Host uploads** (default 64 MB, max 4096 MB).
 - Compose stacks: inspect a single service from the same shell with `docker compose -p launchpad-<id> exec <service> sh`; there is deliberately no service picker.
+
+> The SSH host must be reachable **from the panel container**. `host.docker.internal` only maps to the VM that runs the panel, so an app on a different network needs a path there: a WireGuard/Tailscale mesh, a jump host, or a tunnel (e.g. Cloudflare Access SSH). There is one SSH endpoint in Settings shared by every app terminal and upload; per-app endpoints are not implemented.
 
 ```mermaid
 flowchart LR

@@ -21,9 +21,11 @@ import {
 import {
   getBaseDomain,
   getGithubToken,
+  getSettingsView,
   getSshCredentials,
   getUploadLimitMb,
 } from "../services/settings";
+import { appWorkspacePath } from "../services/workspace";
 import { enqueueDeployment } from "../deploy/runner";
 import {
   restartContainer,
@@ -114,6 +116,16 @@ appsRouter.get("/apps/:id", (req, res) => {
 const uploadQuerySchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),
+});
+
+/** Workspace directory the app terminal starts and uploads default to. */
+appsRouter.get("/apps/:id/workspace", async (req, res) => {
+  const app = requireAppRow(requireParam(req.params, "id"));
+  res.json({
+    workspace: await appWorkspacePath(app),
+    uploadLimitMb: getUploadLimitMb(),
+    sshHost: getSettingsView().sshHost,
+  });
 });
 
 /** Copies a file from the browser onto the host that runs the app, over SFTP. */
