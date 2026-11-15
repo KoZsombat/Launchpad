@@ -421,6 +421,11 @@ Tests cover shared Zod validation, subdomain/reserved-name rules, multi-subdomai
 
 ## License
 
-Source-available under the **Launchpad Attribution License** (MIT plus an attribution requirement), see [LICENSE](LICENSE).
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). Copyright (C) 2026 KoZsombat.
 
-In short: use it, modify it, self-host it, fork it — but any deployment that is made available to end users must show a visible "Based on Launchpad by KoZsombat" attribution in the app UI (About page, footer or similar) and state the same attribution in that project's README. This is a custom license: GitHub reports it as `Other`, it is not OSI-approved, and the extra condition makes it incompatible with GPL/AGPL-licensed derivatives.
+Self-hosting, modifying and redistributing are allowed under AGPL terms. Two consequences worth knowing:
+
+- If you modify the panel and let other users interact with it over a network, you must offer them the corresponding source.
+- A modified version with an interactive UI must display *Appropriate Legal Notices* (AGPL section 5d): a copyright notice, the absence of warranty, and how to view the license. In practice that puts the attribution on the app, not just in the repository.
+
+MIT and Apache-2.0 are the usual alternatives if you ever prefer permissive terms over copyleft.
