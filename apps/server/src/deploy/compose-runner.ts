@@ -220,7 +220,7 @@ export async function deployComposeProject(context: ComposeDeployContext): Promi
       await ensureDockerNetwork(config.dockerNetwork);
       await ensureLocalVolumes(generated.volumes, app.id, log);
       log(`Starting compose project ${project} on the panel host...`);
-      await runComposeLocal(["up", "-d", "--remove-orphans"], {
+      await runComposeLocal(["up", "-d", "--build", "--remove-orphans"], {
         project,
         input: generated.yaml,
         projectDir: source.projectDir,
