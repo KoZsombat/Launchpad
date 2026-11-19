@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { PlugZap, Trash2 } from "lucide-react";
 import { Button, cn } from "../components/ui";
+import { TerminalKeyBar } from "../components/TerminalKeyBar";
 import {
   XtermSession,
   type TerminalStatus,
@@ -12,6 +13,7 @@ export function TerminalPage() {
   const [sessionKey, setSessionKey] = useState(0);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
+  const [ctrlArmed, setCtrlArmed] = useState(false);
 
   const statusLabel =
     status === "connected"
@@ -22,13 +24,18 @@ export function TerminalPage() {
           ? "Connection error"
           : "Disconnected";
 
+  const send = (data: string) => {
+    terminalRef.current?.send(data);
+    terminalRef.current?.focus();
+  };
+
   return (
-    <div className="mx-auto flex h-[calc(100dvh-13rem)] min-h-[420px] max-w-6xl flex-col overflow-hidden rounded-xl border border-edge bg-panel lg:h-[calc(100dvh-8.5rem)]">
-      <header className="flex flex-wrap items-center gap-3 border-b border-edge px-4 py-3">
-        <div className="flex items-center gap-2">
+    <div className="mx-auto flex h-full min-h-[360px] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-edge bg-panel">
+      <header className="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-2.5 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2">
           <span
             className={cn(
-              "h-2 w-2 rounded-full",
+              "h-2 w-2 shrink-0 rounded-full",
               status === "connected"
                 ? "bg-success"
                 : status === "connecting"
@@ -38,17 +45,18 @@ export function TerminalPage() {
                     : "bg-muted",
             )}
           />
-          <span className="text-sm font-medium">SSH terminal</span>
-          <span className="text-xs text-muted">· {statusLabel}</span>
+          <span className="truncate text-sm font-medium">SSH terminal</span>
+          <span className="truncate text-xs text-muted">· {statusLabel}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button size="sm" variant="ghost" onClick={() => terminalRef.current?.clear()}>
             <Trash2 className="h-3.5 w-3.5" />
-            Clear
+            <span className="hidden sm:inline">Clear</span>
           </Button>
           <Button size="sm" onClick={() => setSessionKey((value) => value + 1)}>
             <PlugZap className="h-3.5 w-3.5" />
-            Reconnect
+            <span className="hidden sm:inline">Reconnect</span>
+            <span className="sm:hidden">New</span>
           </Button>
         </div>
       </header>
@@ -68,8 +76,15 @@ export function TerminalPage() {
         url="/api/terminal"
         onStatus={setStatus}
         onError={setError}
+        ctrlArmed={ctrlArmed}
+        onCtrlConsumed={() => setCtrlArmed(false)}
       />
-      <footer className="border-t border-edge px-4 py-1.5 text-[11px] text-muted">
+      <TerminalKeyBar
+        onSend={send}
+        ctrlArmed={ctrlArmed}
+        onToggleCtrl={() => setCtrlArmed((value) => !value)}
+      />
+      <footer className="hidden border-t border-edge px-4 py-1.5 text-[11px] text-muted lg:block">
         SSH session runs from the panel container. Ctrl + ` switches back to the GUI.
       </footer>
     </div>

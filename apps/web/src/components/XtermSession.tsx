@@ -1,4 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  type ForwardedRef,
+} from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { cn } from "./ui";
@@ -8,6 +14,8 @@ export type TerminalStatus = "connecting" | "connected" | "disconnected" | "erro
 export interface XtermSessionHandle {
   clear: () => void;
   focus: () => void;
+  /** Sends raw bytes to the shell (used by the mobile key bar). */
+  send: (data: string) => void;
 }
 
 const terminalTheme = {
@@ -39,21 +47,42 @@ interface XtermSessionProps {
   className?: string;
   onStatus?: (status: TerminalStatus) => void;
   onError?: (message: string | null) => void;
+  /** Sends the next single typed character as Ctrl+<char>. */
+  ctrlArmed?: boolean;
+  onCtrlConsumed?: () => void;
+}
+
+/** Maps a printable key to its Ctrl+key control byte. */
+function toControlCode(char: string): string | null {
+  if (!/^[A-Za-z@\[\]\\^_]$/.test(char)) return null;
+  return String.fromCharCode(char.toUpperCase().charCodeAt(0) & 31);
 }
 
 /** xterm.js view backed by a websocket that carries raw terminal bytes. */
 export const XtermSession = forwardRef<XtermSessionHandle, XtermSessionProps>(
-  function XtermSession({ url, className, onStatus, onError }, ref) {
+  function XtermSession(
+    { url, className, onStatus, onError, ctrlArmed = false, onCtrlConsumed }: XtermSessionProps,
+    ref: ForwardedRef<XtermSessionHandle>,
+  ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
-    const callbacks = useRef({ onStatus, onError });
-    callbacks.current = { onStatus, onError };
+    const socketRef = useRef<WebSocket | null>(null);
+    const ctrlRef = useRef(ctrlArmed);
+    ctrlRef.current = ctrlArmed;
+    const callbacks = useRef({ onStatus, onError, onCtrlConsumed });
+    callbacks.current = { onStatus, onError, onCtrlConsumed };
 
     useImperativeHandle(
       ref,
       () => ({
         clear: () => terminalRef.current?.clear(),
         focus: () => terminalRef.current?.focus(),
+        send: (data: string) => {
+          const socket = socketRef.current;
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "data", data }));
+          }
+        },
       }),
       [],
     );
@@ -84,6 +113,7 @@ export const XtermSession = forwardRef<XtermSessionHandle, XtermSessionProps>(
       let hadError = false;
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
       const socket = new WebSocket(`${protocol}://${window.location.host}${url}`);
+      socketRef.current = socket;
 
       const sendResize = () => {
         if (socket.readyState === WebSocket.OPEN) {
@@ -138,9 +168,14 @@ export const XtermSession = forwardRef<XtermSessionHandle, XtermSessionProps>(
       const raf = requestAnimationFrame(() => fit.fit());
 
       const dataSubscription = terminal.onData((data) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "data", data }));
+        if (socket.readyState !== WebSocket.OPEN) return;
+        let payload = data;
+        if (ctrlRef.current && data.length === 1) {
+          const code = toControlCode(data);
+          if (code) payload = code;
+          callbacks.current.onCtrlConsumed?.();
         }
+        socket.send(JSON.stringify({ type: "data", data: payload }));
       });
 
       const observer = new ResizeObserver(() => {
@@ -150,11 +185,21 @@ export const XtermSession = forwardRef<XtermSessionHandle, XtermSessionProps>(
       });
       observer.observe(container);
 
+      const viewport = window.visualViewport;
+      const onViewportResize = () => {
+        if (disposed) return;
+        fit.fit();
+        sendResize();
+      };
+      viewport?.addEventListener("resize", onViewportResize);
+
       return () => {
         disposed = true;
         cancelAnimationFrame(raf);
         dataSubscription.dispose();
         observer.disconnect();
+        viewport?.removeEventListener("resize", onViewportResize);
+        socketRef.current = null;
         socket.close();
         terminal.dispose();
         terminalRef.current = null;

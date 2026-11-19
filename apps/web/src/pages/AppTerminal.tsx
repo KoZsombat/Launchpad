@@ -5,6 +5,7 @@ import { ArrowLeft, PlugZap, Trash2, Upload } from "lucide-react";
 import type { PublicApp } from "@launchpad/shared";
 import { api, errorMessage } from "../lib/api";
 import { Button, Spinner, cn, inputClass } from "../components/ui";
+import { TerminalKeyBar } from "../components/TerminalKeyBar";
 import {
   XtermSession,
   type TerminalStatus,
@@ -19,6 +20,7 @@ export function AppTerminalPage() {
   const [sessionKey, setSessionKey] = useState(0);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
+  const [ctrlArmed, setCtrlArmed] = useState(false);
   const [uploadDirOverride, setUploadDirOverride] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -108,8 +110,13 @@ export function AppTerminalPage() {
 
   const app = appQuery.data.app;
 
+  const send = (data: string) => {
+    terminalRef.current?.send(data);
+    terminalRef.current?.focus();
+  };
+
   return (
-    <div className="mx-auto flex h-[calc(100dvh-13rem)] min-h-[420px] max-w-6xl flex-col gap-3 lg:h-[calc(100dvh-8.5rem)]">
+    <div className="mx-auto flex h-full min-h-[360px] w-full max-w-6xl flex-col gap-2 sm:gap-3">
       <div className="flex flex-wrap items-center gap-3">
         <Link
           to={`/apps/${appId}`}
@@ -119,13 +126,13 @@ export function AppTerminalPage() {
           {app.name}
         </Link>
         <span className="text-xs text-muted">Host terminal</span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <input
             value={uploadDir}
             onChange={(event) => setUploadDirOverride(event.target.value)}
             aria-label="Upload destination directory"
             placeholder={workspace ?? "/tmp"}
-            className={cn(inputClass, "h-8 w-48 px-2 py-1 font-mono text-xs")}
+            className={cn(inputClass, "h-8 w-full px-2 py-1 font-mono text-xs sm:w-48")}
           />
           <input
             ref={fileRef}
@@ -186,7 +193,7 @@ export function AppTerminalPage() {
             <span className="text-sm font-medium">{app.name}</span>
             <span className="text-xs text-muted">· {statusLabel}</span>
           </div>
-          <span className="ml-auto text-[11px] text-muted">
+          <span className="ml-auto hidden text-[11px] text-muted sm:inline">
             Uploads are written to the host; max {uploadLimitMb} MB per file.
           </span>
         </header>
@@ -206,9 +213,17 @@ export function AppTerminalPage() {
           url={`/api/terminal/apps/${appId}`}
           onStatus={setStatus}
           onError={setError}
+          ctrlArmed={ctrlArmed}
+          onCtrlConsumed={() => setCtrlArmed(false)}
         />
 
-        <footer className="border-t border-edge px-4 py-1.5 text-[11px] text-muted">
+        <TerminalKeyBar
+          onSend={send}
+          ctrlArmed={ctrlArmed}
+          onToggleCtrl={() => setCtrlArmed((value) => !value)}
+        />
+
+        <footer className="hidden border-t border-edge px-4 py-1.5 text-[11px] text-muted lg:block">
           SSH shell and SFTP uploads go to{" "}
           <span className="font-mono">{sshHost ?? "the host in Settings"}</span>.{" "}
           {workspace ? (

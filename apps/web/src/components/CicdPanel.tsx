@@ -102,7 +102,7 @@ export function CicdPanel({
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
               GitHub repository secrets
             </div>
-            <div className="overflow-hidden rounded-lg border border-edge">
+            <div className="overflow-x-auto rounded-lg border border-edge">
               <table className="w-full text-left text-xs">
                 <thead className="bg-panel-2 text-muted">
                   <tr>
@@ -114,7 +114,7 @@ export function CicdPanel({
                   {info.secrets.map((secret) => (
                     <tr key={secret.name}>
                       <td className="whitespace-nowrap px-3 py-2 font-mono">{secret.name}</td>
-                      <td className="px-3 py-2 text-muted">
+                      <td className="break-all px-3 py-2 text-muted">
                         {secret.value ? (
                           <span className="font-mono">{secret.value}</span>
                         ) : (

@@ -50,9 +50,13 @@ export function Layout({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", handler);
   }, [location.pathname, navigate]);
 
+  const signOut = () => {
+    void authClient.signOut().then(() => navigate("/login"));
+  };
+
   return (
-    <div className="flex min-h-full bg-canvas text-ink">
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-edge bg-panel/60 lg:flex">
+    <div className="flex h-dvh overflow-hidden bg-canvas text-ink">
+      <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel/60 lg:flex">
         <div className="flex items-center gap-2.5 px-5 py-5">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
             <Rocket className="h-4.5 w-4.5" style={{ height: 18, width: 18 }} />
@@ -119,9 +123,7 @@ export function Layout({ children }: { children: ReactNode }) {
             {dark ? "Light mode" : "Dark mode"}
           </button>
           <button
-            onClick={() => {
-              void authClient.signOut().then(() => navigate("/login"));
-            }}
+            onClick={signOut}
             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-panel-2 hover:text-ink"
           >
             <LogOut className="h-4 w-4" />
@@ -130,35 +132,63 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-3 border-b border-edge bg-panel/50 px-4 py-3 lg:hidden">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/15 text-accent">
-              <Rocket className="h-4 w-4" />
-            </span>
-            <span className="text-sm font-semibold">Launchpad</span>
-          </Link>
-          <div className="flex items-center gap-1">
-            <Link
-              to="/terminal"
-              className={cn(
-                "rounded-md px-2.5 py-1.5 text-xs",
-                cliActive ? "bg-accent/10 text-accent" : "text-muted",
-              )}
-            >
-              CLI
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-edge bg-panel/95 backdrop-blur lg:hidden">
+          <header className="flex items-center justify-between gap-2 px-3 py-2.5">
+            <Link to="/" className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/15 text-accent">
+                <Rocket className="h-4 w-4" />
+              </span>
+              <span className="text-sm font-semibold">Launchpad</span>
             </Link>
-            <button
-              onClick={() => setDark(!dark)}
-              className="rounded-md p-2 text-muted hover:bg-panel-2 hover:text-ink"
-              aria-label="Toggle theme"
-            >
-              {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
-          </div>
-        </header>
+            <div className="flex items-center gap-1">
+              <Link
+                to="/terminal"
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 text-xs",
+                  cliActive ? "bg-accent/10 text-accent" : "text-muted",
+                )}
+              >
+                CLI
+              </Link>
+              <button
+                onClick={() => setDark(!dark)}
+                className="rounded-md p-2 text-muted hover:bg-panel-2 hover:text-ink"
+                aria-label="Toggle theme"
+              >
+                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <button
+                onClick={signOut}
+                className="rounded-md p-2 text-muted hover:bg-panel-2 hover:text-ink"
+                aria-label="Sign out"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
+          </header>
 
-        <header className="hidden items-center justify-end gap-2 border-b border-edge px-6 py-2.5 lg:flex">
+          <nav className="flex gap-1 overflow-x-auto px-2 pb-2">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) =>
+                  cn(
+                    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-xs",
+                    isActive ? "bg-accent/10 text-accent" : "text-muted",
+                  )
+                }
+              >
+                <item.icon className="h-3.5 w-3.5" />
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
+
+        <header className="hidden shrink-0 items-center justify-end gap-2 border-b border-edge bg-panel/70 px-6 py-2.5 backdrop-blur lg:flex">
           <span className="mr-auto text-[11px] uppercase tracking-widest text-muted">
             {cliActive ? "Web SSH terminal" : "Deploy dashboard"}
           </span>
@@ -171,25 +201,12 @@ export function Layout({ children }: { children: ReactNode }) {
           </button>
         </header>
 
-        <nav className="flex gap-1 overflow-x-auto border-b border-edge bg-panel/40 px-3 py-2 lg:hidden">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                cn(
-                  "whitespace-nowrap rounded-md px-3 py-1.5 text-xs",
-                  isActive ? "bg-accent/10 text-accent" : "text-muted",
-                )
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-
-        <main className={cn("min-w-0 flex-1", cliActive ? "p-3 lg:p-4" : "p-4 lg:p-8")}>
+        <main
+          className={cn(
+            "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain",
+            cliActive ? "flex flex-col p-2 sm:p-3 lg:p-4" : "p-3 sm:p-4 lg:p-8",
+          )}
+        >
           {children}
         </main>
       </div>
