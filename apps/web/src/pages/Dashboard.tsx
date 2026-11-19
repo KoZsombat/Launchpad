@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  Cpu,
   ExternalLink,
+  MemoryStick,
   Play,
   Plus,
   RotateCw,
@@ -9,10 +11,15 @@ import {
   SquareTerminal,
   TerminalSquare,
 } from "lucide-react";
-import type { PublicApp } from "@launchpad/shared";
+import type { HostStats, PublicApp } from "@launchpad/shared";
 import { api, apiJson, errorMessage } from "../lib/api";
-import { formatRelative } from "../lib/format";
-import { DeploymentBadge, EmptyState, StatusBadge } from "../components/ui";
+import { formatBytes, formatRelative } from "../lib/format";
+import {
+  DeploymentBadge,
+  EmptyState,
+  StatusBadge,
+  UsageCard,
+} from "../components/ui";
 import { cn } from "../components/ui";
 
 type AppAction = "deploy" | "restart" | "stop" | "start";
@@ -22,6 +29,12 @@ export function DashboardPage() {
   const appsQuery = useQuery({
     queryKey: ["apps"],
     queryFn: () => api<{ apps: PublicApp[] }>("/api/apps"),
+    refetchInterval: 10_000,
+  });
+
+  const statsQuery = useQuery({
+    queryKey: ["host-stats"],
+    queryFn: () => api<{ stats: HostStats }>("/api/stats"),
     refetchInterval: 10_000,
   });
 
@@ -35,6 +48,7 @@ export function DashboardPage() {
 
   const apps = appsQuery.data?.apps ?? [];
   const activeAction = action.isPending ? action.variables : null;
+  const hostStats = statsQuery.data?.stats ?? null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -42,9 +56,8 @@ export function DashboardPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Applications</h1>
           <p className="mt-1 text-sm text-muted">
-            Every container or compose service on the{" "}
-            <span className="font-mono text-xs">web</span> network with a Traefik route gets its
-            own subdomain.
+            Containers, compose projects, bots and workers — with a Traefik route, a published
+            port, or no ingress at all.
           </p>
         </div>
         <Link
@@ -55,6 +68,35 @@ export function DashboardPage() {
           New app
         </Link>
       </header>
+
+      {hostStats ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <UsageCard
+            icon={<Cpu className="h-3.5 w-3.5" />}
+            label="Container CPU"
+            value={`${hostStats.cpuPercent.toFixed(1)}%`}
+            detail={`${hostStats.containerCount} running · ${hostStats.hostCpuCount} host core${
+              hostStats.hostCpuCount === 1 ? "" : "s"
+            }`}
+            percent={
+              hostStats.hostCpuCount > 0
+                ? (hostStats.cpuPercent / (hostStats.hostCpuCount * 100)) * 100
+                : 0
+            }
+          />
+          <UsageCard
+            icon={<MemoryStick className="h-3.5 w-3.5" />}
+            label="Container memory"
+            value={formatBytes(hostStats.memoryBytes)}
+            detail={`of ${formatBytes(hostStats.hostMemoryBytes)} on the host`}
+            percent={
+              hostStats.hostMemoryBytes > 0
+                ? (hostStats.memoryBytes / hostStats.hostMemoryBytes) * 100
+                : 0
+            }
+          />
+        </div>
+      ) : null}
 
       {action.isError ? (
         <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
@@ -104,20 +146,28 @@ export function DashboardPage() {
                     >
                       {app.name}
                     </Link>
-                    <a
-                      href={app.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted hover:text-accent"
-                    >
-                      {app.subdomain}
-                      {app.subdomains.length > 1 ? (
-                        <span className="text-[10px] text-muted">
-                          +{app.subdomains.length - 1}
-                        </span>
-                      ) : null}
-                      <ExternalLink className="h-3 w-3 shrink-0" />
-                    </a>
+                    {app.access === "http" ? (
+                      <a
+                        href={app.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted hover:text-accent"
+                      >
+                        {app.subdomain}
+                        {app.subdomains.length > 1 ? (
+                          <span className="text-[10px] text-muted">
+                            +{app.subdomains.length - 1}
+                          </span>
+                        ) : null}
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    ) : (
+                      <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted">
+                        {app.access === "port"
+                          ? `port ${app.hostPort ?? app.internalPort}/${app.portProtocol}`
+                          : "background service"}
+                      </span>
+                    )}
                   </div>
                   <StatusBadge status={app.status} />
                 </div>

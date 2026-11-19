@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
+  Activity,
   ArrowLeft,
+  Cpu,
   ExternalLink,
   History,
+  MemoryStick,
   Play,
   RotateCw,
   Square,
@@ -14,11 +17,12 @@ import {
 } from "lucide-react";
 import { appUrl } from "@launchpad/shared";
 import type {
+  AppStats,
   DeploymentSummary,
   PublicApp,
 } from "@launchpad/shared";
 import { api, apiJson, errorMessage } from "../lib/api";
-import { formatDateTime, formatRelative, shortId } from "../lib/format";
+import { formatBytes, formatDateTime, formatRelative, shortId } from "../lib/format";
 import {
   Button,
   DeploymentBadge,
@@ -26,6 +30,7 @@ import {
   Panel,
   Spinner,
   StatusBadge,
+  UsageCard,
   cn,
 } from "../components/ui";
 import { ConfigEditor, type AppConfigUpdate } from "../components/ConfigEditor";
@@ -58,6 +63,7 @@ export function AppDetailPage() {
   const [configNotice, setConfigNotice] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [removeVolumes, setRemoveVolumes] = useState(false);
+  const [showAllDeployments, setShowAllDeployments] = useState(false);
 
   useEffect(() => {
     const fromQuery = searchParams.get("deployment");
@@ -76,6 +82,13 @@ export function AppDetailPage() {
     queryFn: () => api<{ deployments: DeploymentSummary[] }>(`/api/apps/${appId}/deployments`),
     enabled: Boolean(appId),
     refetchInterval: 4_000,
+  });
+
+  const statsQuery = useQuery({
+    queryKey: ["app-stats", appId],
+    queryFn: () => api<{ stats: AppStats }>(`/api/apps/${appId}/stats`),
+    enabled: Boolean(appId),
+    refetchInterval: 5_000,
   });
 
   const action = useMutation({
@@ -168,6 +181,8 @@ export function AppDetailPage() {
   const selected = selectedDeployment
     ? deployments.find((deployment) => deployment.id === selectedDeployment) ?? null
     : null;
+  const visibleDeployments =
+    showAllDeployments || deployments.length <= 5 ? deployments : deployments.slice(0, 5);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -188,26 +203,34 @@ export function AppDetailPage() {
             <StatusBadge status={app.status} />
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-            {app.subdomains.map((subdomain) => {
-              const url = appUrl(subdomain, app.baseDomain);
-              return (
-                <a
-                  key={subdomain}
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-accent"
-                >
-                  {subdomain}
-                  {subdomain === app.subdomain ? (
-                    <span className="rounded border border-edge px-1 text-[10px] uppercase text-muted">
-                      primary
-                    </span>
-                  ) : null}
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </a>
-              );
-            })}
+            {app.access === "http" ? (
+              app.subdomains.map((subdomain) => {
+                const url = appUrl(subdomain, app.baseDomain);
+                return (
+                  <a
+                    key={subdomain}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-accent"
+                  >
+                    {subdomain}
+                    {subdomain === app.subdomain ? (
+                      <span className="rounded border border-edge px-1 text-[10px] uppercase text-muted">
+                        primary
+                      </span>
+                    ) : null}
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                );
+              })
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-sm text-muted">
+                {app.access === "port"
+                  ? `Published on port ${app.hostPort ?? app.internalPort}/${app.portProtocol}`
+                  : "Background service — no ingress"}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -282,6 +305,25 @@ export function AppDetailPage() {
           hint={app.deployTarget === "remote" ? "Deployed over SSH" : "Docker socket"}
         />
         <MetaCard
+          label="Access"
+          value={
+            app.access === "http"
+              ? "Traefik · HTTP"
+              : app.access === "port"
+                ? `${app.hostPort ?? app.internalPort}/${app.portProtocol} on the host`
+                : "No ingress"
+          }
+          hint={
+            app.access === "http"
+              ? app.subdomains.length > 1
+                ? `${app.subdomains.length} hostnames`
+                : undefined
+              : app.access === "none"
+                ? "Worker, bot, cron or database"
+                : "Publish that port in the host firewall"
+          }
+        />
+        <MetaCard
           label="Last deploy"
           value={app.lastDeployment ? formatRelative(app.lastDeployment.queuedAt) : "never"}
           hint={app.lastDeployment ? formatDateTime(app.lastDeployment.queuedAt) : undefined}
@@ -302,6 +344,68 @@ export function AppDetailPage() {
       <Panel
         title={
           <span className="flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            Resources
+          </span>
+        }
+        description="Live CPU and memory of this app's containers on the deploy host."
+        actions={
+          statsQuery.isFetching ? (
+            <span className="text-[11px] text-muted">Sampling…</span>
+          ) : null
+        }
+      >
+        {statsQuery.isError ? (
+          <p className="text-sm text-danger">{errorMessage(statsQuery.error)}</p>
+        ) : !statsQuery.data ? (
+          <p className="text-sm text-muted">Loading usage…</p>
+        ) : !statsQuery.data.stats.available ? (
+          <p className="text-sm text-muted">
+            Usage is not available for apps deployed to a separate host.
+          </p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <UsageCard
+              icon={<Cpu className="h-3.5 w-3.5" />}
+              label="CPU"
+              value={`${statsQuery.data.stats.cpuPercent.toFixed(1)}%`}
+              detail={`${statsQuery.data.stats.containerCount} container${
+                statsQuery.data.stats.containerCount === 1 ? "" : "s"
+              } · ${statsQuery.data.stats.hostCpuCount} core${
+                statsQuery.data.stats.hostCpuCount === 1 ? "" : "s"
+              }`}
+              percent={
+                statsQuery.data.stats.hostCpuCount > 0
+                  ? (statsQuery.data.stats.cpuPercent /
+                      (statsQuery.data.stats.hostCpuCount * 100)) *
+                    100
+                  : 0
+              }
+            />
+            <UsageCard
+              icon={<MemoryStick className="h-3.5 w-3.5" />}
+              label="Memory"
+              value={formatBytes(statsQuery.data.stats.memoryBytes)}
+              detail={
+                statsQuery.data.stats.memoryLimitBytes > 0
+                  ? `of ${formatBytes(statsQuery.data.stats.memoryLimitBytes)} limit`
+                  : undefined
+              }
+              percent={
+                statsQuery.data.stats.memoryLimitBytes > 0
+                  ? (statsQuery.data.stats.memoryBytes /
+                      statsQuery.data.stats.memoryLimitBytes) *
+                    100
+                  : 0
+              }
+            />
+          </div>
+        )}
+      </Panel>
+
+      <Panel
+        title={
+          <span className="flex items-center gap-2">
             <History className="h-4 w-4" />
             Deployments
           </span>
@@ -317,7 +421,7 @@ export function AppDetailPage() {
           <p className="text-sm text-muted">No deployments yet.</p>
         ) : (
           <div className="divide-y divide-edge overflow-hidden rounded-lg border border-edge">
-            {deployments.map((deployment) => (
+            {visibleDeployments.map((deployment) => (
               <button
                 key={deployment.id}
                 onClick={() => setSelectedDeployment(deployment.id)}
@@ -339,6 +443,18 @@ export function AppDetailPage() {
             ))}
           </div>
         )}
+
+        {deployments.length > 5 ? (
+          <button
+            type="button"
+            onClick={() => setShowAllDeployments((value) => !value)}
+            className="mt-2 rounded-md px-2 py-1 text-xs text-muted transition-colors hover:bg-panel-2 hover:text-ink"
+          >
+            {showAllDeployments
+              ? "Show last 5"
+              : `Show all ${deployments.length} deployments`}
+          </button>
+        ) : null}
 
         {selectedDeployment ? (
           <div className="mt-4 space-y-2">
@@ -422,7 +538,9 @@ export function AppDetailPage() {
         <p>
           {app.sourceType === "compose"
             ? "This stops and removes the compose project and deletes the project and its deployment history. Traefik routes disappear with the containers."
-            : "This stops and removes the container and deletes the app and its deployment history. The Traefik route disappears with the container."}
+            : app.access === "http"
+              ? "This stops and removes the container and deletes the app and its deployment history. The Traefik route disappears with the container."
+              : "This stops and removes the container and deletes the app and its deployment history. Any published host port is released."}
         </p>
         <label className="mt-4 flex items-start gap-2 text-xs">
           <input

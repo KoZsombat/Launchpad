@@ -302,3 +302,37 @@ export function EmptyState({
     </div>
   );
 }
+
+export function UsageCard({
+  icon,
+  label,
+  value,
+  detail,
+  percent,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  detail?: string;
+  percent: number;
+}) {
+  const width = Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0;
+  return (
+    <div className="rounded-lg border border-edge bg-panel px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-widest text-muted">
+          {icon}
+          {label}
+        </span>
+        <span className="text-lg font-semibold tabular-nums">{value}</span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-panel-2">
+        <div
+          className="h-full rounded-full bg-accent transition-[width] duration-500"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      {detail ? <div className="mt-1 text-[11px] text-muted">{detail}</div> : null}
+    </div>
+  );
+}

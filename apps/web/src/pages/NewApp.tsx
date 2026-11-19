@@ -3,11 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
+  Boxes,
   CheckCircle2,
   GitBranch,
   Globe2,
   Image as ImageIcon,
   Layers,
+  Network,
   Rocket,
   XCircle,
 } from "lucide-react";
@@ -54,6 +56,7 @@ interface FormState {
   subdomain: string;
   domain: string;
   sourceType: "image" | "github" | "compose";
+  access: "http" | "port" | "none";
   imageRef: string;
   registryUsername: string;
   registryPassword: string;
@@ -63,6 +66,8 @@ interface FormState {
   buildContext: string;
   repoToken: string;
   internalPort: string;
+  hostPort: string;
+  portProtocol: "tcp" | "udp";
   healthPath: string;
   envVars: EnvRowState[];
   volumes: VolumeRowState[];
@@ -74,6 +79,7 @@ const initialForm: FormState = {
   subdomain: "",
   domain: "",
   sourceType: "image",
+  access: "http",
   imageRef: "",
   registryUsername: "",
   registryPassword: "",
@@ -83,6 +89,8 @@ const initialForm: FormState = {
   buildContext: ".",
   repoToken: "",
   internalPort: "3000",
+  hostPort: "",
+  portProtocol: "tcp",
   healthPath: "/",
   envVars: [],
   volumes: [],
@@ -115,15 +123,19 @@ export function NewAppPage() {
       setAvailability(null);
       return;
     }
-    if (form.sourceType !== "compose" && !validateSubdomain(form.subdomain).ok) {
+    if (
+      form.sourceType !== "compose" &&
+      form.access === "http" &&
+      !validateSubdomain(form.subdomain).ok
+    ) {
       setAvailability(null);
       return;
     }
     const domain = form.domain.trim();
+    const needsSubdomain = form.sourceType !== "compose" && form.access === "http";
     const query =
-      (form.sourceType === "compose"
-        ? `name=${encodeURIComponent(form.name)}`
-        : `name=${encodeURIComponent(form.name)}&subdomain=${encodeURIComponent(form.subdomain)}`) +
+      `name=${encodeURIComponent(form.name)}` +
+      (needsSubdomain ? `&subdomain=${encodeURIComponent(form.subdomain)}` : "") +
       (domain ? `&domain=${encodeURIComponent(domain)}` : "");
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -141,7 +153,7 @@ export function NewAppPage() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [form.name, form.subdomain, form.domain, form.sourceType]);
+  }, [form.name, form.subdomain, form.domain, form.sourceType, form.access]);
 
   const create = useMutation({
     mutationFn: (payload: unknown) =>
@@ -256,15 +268,16 @@ export function NewAppPage() {
         setGeneralError("Scan the compose file and configure at least one service.");
         return;
       }
-      if (!primary) {
-        setGeneralError("Publish at least one service and give it a subdomain.");
+      if (exposed.length > 0 && !primary) {
+        setGeneralError("Give at least one published service a subdomain.");
         return;
       }
       const payload = {
         name: form.name.trim(),
-        subdomain: primary,
+        subdomain: primary ?? "",
         domain: form.domain.trim() || undefined,
         sourceType: "compose" as const,
+        access: exposed.length > 0 ? ("http" as const) : ("none" as const),
         composeFile: compose.composeText || undefined,
         composePath:
           compose.inputMode === "repo" ? compose.composePath.trim() || undefined : undefined,
@@ -277,7 +290,7 @@ export function NewAppPage() {
         envVars: compose.projectEnv
           .filter((row) => row.key.trim())
           .map((row) => ({ key: row.key.trim(), value: row.value, secret: row.secret })),
-        internalPort: exposed[0]?.internalPort,
+        internalPort: exposed[0]?.internalPort ?? 80,
         healthPath: "/",
         volumes: [],
       };
@@ -298,9 +311,15 @@ export function NewAppPage() {
 
     const payload = {
       name: form.name.trim(),
-      subdomain: form.subdomain.trim(),
+      subdomain: form.access === "http" ? form.subdomain.trim() : "",
       domain: form.domain.trim() || undefined,
       sourceType: form.sourceType,
+      access: form.access,
+      hostPort:
+        form.access === "port"
+          ? Number(form.hostPort || form.internalPort)
+          : undefined,
+      portProtocol: form.portProtocol,
       imageRef: form.sourceType === "image" ? form.imageRef.trim() || undefined : undefined,
       registryUsername:
         form.sourceType === "image" ? form.registryUsername.trim() || undefined : undefined,
@@ -370,8 +389,9 @@ export function NewAppPage() {
         </Link>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight">New application</h1>
         <p className="mt-1 text-sm text-muted">
-          Launchpad builds or pulls the image, starts a container on the shared network and waits
-          for it to answer its health check.
+          Launchpad builds or pulls the image, starts a container and exposes it the way you
+          choose: an HTTP subdomain, a raw TCP/UDP port, or no ingress at all for bots and
+          workers.
         </p>
       </div>
 
@@ -387,7 +407,7 @@ export function NewAppPage() {
           description={
             form.sourceType === "compose"
               ? "The project name is permanent. Every service gets its own hostnames."
-              : "The name and subdomain are permanent identifiers."
+              : "The name is permanent. Choose how the app is reached."
           }
         >
           <div className="mb-4 grid grid-cols-1 gap-2 rounded-lg border border-edge bg-panel-2 p-1 sm:grid-cols-3">
@@ -415,7 +435,49 @@ export function NewAppPage() {
             ))}
           </div>
 
-          <div className={cn("grid gap-4", form.sourceType !== "compose" && "sm:grid-cols-2")}>
+          {form.sourceType !== "compose" ? (
+            <div className="mb-4">
+              <span className="text-sm font-medium">App type</span>
+              <p className="mt-1 text-xs text-muted">
+                Web apps get a Traefik route. Everything else can publish a raw port or run
+                without any ingress.
+              </p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                {(
+                  [
+                    { value: "http", label: "Web app", hint: "HTTP subdomain via Traefik", icon: Globe2 },
+                    { value: "port", label: "Published port", hint: "Raw TCP/UDP port on the host", icon: Network },
+                    { value: "none", label: "Background", hint: "Worker, cron, queue or database", icon: Boxes },
+                  ] as const
+                ).map(({ value, label, hint, icon: Icon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => update("access", value)}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left transition-colors",
+                      form.access === value
+                        ? "border-accent/50 bg-accent/10 text-accent"
+                        : "border-edge bg-panel hover:border-muted/40",
+                    )}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      <Icon className="h-4 w-4" />
+                      {label}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-muted">{hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div
+            className={cn(
+              "grid gap-4",
+              form.sourceType !== "compose" && form.access === "http" && "sm:grid-cols-2",
+            )}
+          >
             <Field
               label="Name"
               hint="Lowercase slug, unique in the panel."
@@ -436,7 +498,7 @@ export function NewAppPage() {
                 autoFocus
               />
             </Field>
-            {form.sourceType !== "compose" ? (
+            {form.sourceType !== "compose" && form.access === "http" ? (
               <Field
                 label="Subdomain"
                 hint={
@@ -474,43 +536,45 @@ export function NewAppPage() {
             ) : null}
           </div>
 
-          <div className="mt-4">
-            <Field
-              label="Project domain (optional)"
-              hint={`Empty uses the panel default (${baseDomain}). Use localhost for local test URLs.`}
-            >
-              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                <div className="min-w-0 flex-1">
-                  <input
-                    className={inputClass}
-                    value={form.domain}
-                    onChange={(event) => update("domain", event.target.value.toLowerCase())}
-                    placeholder={baseDomain}
-                    spellCheck={false}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={() => update("domain", "localhost")}
-                >
-                  Use localhost
-                </Button>
-                {form.domain ? (
+          {form.sourceType === "compose" || form.access === "http" ? (
+            <div className="mt-4">
+              <Field
+                label="Project domain (optional)"
+                hint={`Empty uses the panel default (${baseDomain}). Use localhost for local test URLs.`}
+              >
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <input
+                      className={inputClass}
+                      value={form.domain}
+                      onChange={(event) => update("domain", event.target.value.toLowerCase())}
+                      placeholder={baseDomain}
+                      spellCheck={false}
+                    />
+                  </div>
                   <Button
                     type="button"
                     size="sm"
-                    variant="ghost"
                     className="shrink-0"
-                    onClick={() => update("domain", "")}
+                    onClick={() => update("domain", "localhost")}
                   >
-                    Use default
+                    Use localhost
                   </Button>
-                ) : null}
-              </div>
-            </Field>
-          </div>
+                  {form.domain ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0"
+                      onClick={() => update("domain", "")}
+                    >
+                      Use default
+                    </Button>
+                  ) : null}
+                </div>
+              </Field>
+            </div>
+          ) : null}
 
           {form.sourceType === "compose" ? (
             <>
@@ -523,7 +587,7 @@ export function NewAppPage() {
                 Publish services and assign their subdomains in the compose section below.
               </p>
             </>
-          ) : (
+          ) : form.access === "http" ? (
             <>
               <div className="mt-4 flex items-center gap-2 rounded-lg border border-edge bg-panel-2 px-3 py-2.5 text-sm">
                 <Globe2 className="h-4 w-4 text-muted" />
@@ -560,6 +624,67 @@ export function NewAppPage() {
                   />
                 </Field>
               </div>
+            </>
+          ) : (
+            <>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="Container port"
+                  hint="The port your app listens on inside the container."
+                  error={errors.internalPort}
+                >
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={form.internalPort}
+                    onChange={(event) => update("internalPort", event.target.value)}
+                  />
+                </Field>
+                {form.access === "port" ? (
+                  <Field
+                    label="Host port"
+                    hint="Public port on the deploy host; defaults to the container port."
+                    error={errors.hostPort}
+                  >
+                    <input
+                      className={inputClass}
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={form.hostPort}
+                      placeholder={form.internalPort}
+                      onChange={(event) => update("hostPort", event.target.value)}
+                    />
+                  </Field>
+                ) : null}
+              </div>
+
+              {form.access === "port" ? (
+                <div className="mt-4 max-w-xs">
+                  <Field label="Protocol">
+                    <select
+                      className={inputClass}
+                      value={form.portProtocol}
+                      onChange={(event) =>
+                        update("portProtocol", event.target.value === "udp" ? "udp" : "tcp")
+                      }
+                    >
+                      <option value="tcp">TCP</option>
+                      <option value="udp">UDP</option>
+                    </select>
+                  </Field>
+                </div>
+              ) : null}
+
+              <p className="mt-4 rounded-lg border border-edge bg-panel-2 px-3 py-2.5 text-xs text-muted">
+                {form.access === "port"
+                  ? `Traffic reaches the app directly on port ${
+                      form.hostPort.trim() || form.internalPort
+                    }/${form.portProtocol}. Open that port in the host firewall and any NAT in front of it.`
+                  : "This container gets no inbound route. Useful for workers, cron jobs, queues and databases that other apps reach over the shared Docker network."}
+              </p>
             </>
           )}
 

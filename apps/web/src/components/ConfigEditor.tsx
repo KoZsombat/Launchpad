@@ -11,6 +11,10 @@ import { Button, Field, Panel, inputClass } from "./ui";
 
 export interface AppConfigUpdate {
   domain?: string | null;
+  access?: "http" | "port" | "none";
+  subdomain?: string;
+  hostPort?: number;
+  portProtocol?: "tcp" | "udp";
   internalPort: number;
   healthPath: string;
   envVars: { key: string; value?: string; secret: boolean }[];
@@ -35,6 +39,10 @@ export function ConfigEditor({
   onSave: (update: AppConfigUpdate) => void;
 }) {
   const [domain, setDomain] = useState(app.domain ?? "");
+  const [access, setAccess] = useState<"http" | "port" | "none">(app.access);
+  const [subdomain, setSubdomain] = useState(app.subdomain);
+  const [hostPort, setHostPort] = useState(app.hostPort ? String(app.hostPort) : "");
+  const [portProtocol, setPortProtocol] = useState<"tcp" | "udp">(app.portProtocol);
   const [internalPort, setInternalPort] = useState(String(app.internalPort));
   const [healthPath, setHealthPath] = useState(app.healthPath);
   const [envRows, setEnvRows] = useState<EnvRowState[]>(
@@ -93,6 +101,13 @@ export function ConfigEditor({
       update.buildContext = buildContext.trim();
       if (repoToken) update.repoToken = repoToken;
     }
+    if (app.sourceType !== "compose") {
+      update.access = access;
+      update.portProtocol = portProtocol;
+      if (access === "http") update.subdomain = subdomain.trim();
+      update.hostPort =
+        access === "port" ? Number(hostPort || internalPort) : undefined;
+    }
     onSave(update);
   };
 
@@ -108,43 +123,106 @@ export function ConfigEditor({
           </Button>
         }
       >
-        <div className="grid gap-4">
-          <Field
-            label="Project domain"
-            hint={`Empty uses the panel default (${app.defaultDomain}). Use localhost for local tests.`}
-          >
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <div className="min-w-0 flex-1">
+        {app.sourceType !== "compose" ? (
+          <div className="mb-4 grid gap-4 sm:grid-cols-3">
+            <Field label="Access" hint="Changing this redeploys the container.">
+              <select
+                className={inputClass}
+                value={access}
+                onChange={(event) =>
+                  setAccess(
+                    event.target.value === "port"
+                      ? "port"
+                      : event.target.value === "none"
+                        ? "none"
+                        : "http",
+                  )
+                }
+              >
+                <option value="http">Web app (Traefik)</option>
+                <option value="port">Published host port</option>
+                <option value="none">Background (no ingress)</option>
+              </select>
+            </Field>
+            {access === "http" ? (
+              <Field label="Subdomain" hint="DNS label for the Traefik route.">
                 <input
                   className={inputClass}
-                  value={domain}
-                  onChange={(event) => setDomain(event.target.value.toLowerCase())}
-                  placeholder={app.defaultDomain}
+                  value={subdomain}
+                  onChange={(event) => setSubdomain(event.target.value.toLowerCase())}
                   spellCheck={false}
                 />
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                className="shrink-0"
-                onClick={() => setDomain("localhost")}
-              >
-                Use localhost
-              </Button>
-              {domain ? (
+              </Field>
+            ) : null}
+            {access === "port" ? (
+              <>
+                <Field label="Host port" hint="Defaults to the internal port.">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={hostPort}
+                    placeholder={internalPort}
+                    onChange={(event) => setHostPort(event.target.value)}
+                  />
+                </Field>
+                <Field label="Protocol">
+                  <select
+                    className={inputClass}
+                    value={portProtocol}
+                    onChange={(event) =>
+                      setPortProtocol(event.target.value === "udp" ? "udp" : "tcp")
+                    }
+                  >
+                    <option value="tcp">TCP</option>
+                    <option value="udp">UDP</option>
+                  </select>
+                </Field>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
+        {app.sourceType === "compose" || access === "http" ? (
+          <div className="grid gap-4">
+            <Field
+              label="Project domain"
+              hint={`Empty uses the panel default (${app.defaultDomain}). Use localhost for local tests.`}
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <input
+                    className={inputClass}
+                    value={domain}
+                    onChange={(event) => setDomain(event.target.value.toLowerCase())}
+                    placeholder={app.defaultDomain}
+                    spellCheck={false}
+                  />
+                </div>
                 <Button
                   type="button"
                   size="sm"
-                  variant="ghost"
                   className="shrink-0"
-                  onClick={() => setDomain("")}
+                  onClick={() => setDomain("localhost")}
                 >
-                  Use default
+                  Use localhost
                 </Button>
-              ) : null}
-            </div>
-          </Field>
-        </div>
+                {domain ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="shrink-0"
+                    onClick={() => setDomain("")}
+                  >
+                    Use default
+                  </Button>
+                ) : null}
+              </div>
+            </Field>
+          </div>
+        ) : null}
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Internal port">
@@ -157,14 +235,16 @@ export function ConfigEditor({
               onChange={(event) => setInternalPort(event.target.value)}
             />
           </Field>
-          <Field label="Health check path">
-            <input
-              className={inputClass}
-              value={healthPath}
-              onChange={(event) => setHealthPath(event.target.value)}
-              spellCheck={false}
-            />
-          </Field>
+          {app.sourceType === "compose" || access === "http" ? (
+            <Field label="Health check path">
+              <input
+                className={inputClass}
+                value={healthPath}
+                onChange={(event) => setHealthPath(event.target.value)}
+                spellCheck={false}
+              />
+            </Field>
+          ) : null}
         </div>
 
         <details className="mt-5 rounded-lg border border-edge bg-panel-2/50 px-4 py-3">
