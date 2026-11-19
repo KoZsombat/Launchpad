@@ -119,6 +119,14 @@ export const apps = sqliteTable("apps", {
     .default("local"),
   domain: text("domain"),
 
+  access: text("access", { enum: ["http", "port", "none"] })
+    .notNull()
+    .default("http"),
+  hostPort: integer("host_port"),
+  portProtocol: text("port_protocol", { enum: ["tcp", "udp"] })
+    .notNull()
+    .default("tcp"),
+
   internalPort: integer("internal_port").notNull(),
   healthPath: text("health_path").notNull().default("/"),
   envVars: text("env_vars", { mode: "json" }).$type<StoredEnvVar[]>().notNull().default([]),

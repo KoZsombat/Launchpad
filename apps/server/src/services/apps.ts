@@ -124,6 +124,33 @@ function assertUniqueSubdomains(
   }
 }
 
+function assertHostPortAvailable(
+  port: number,
+  protocol: "tcp" | "udp",
+  excludeId?: string,
+): void {
+  const rows = db
+    .select({
+      id: apps.id,
+      access: apps.access,
+      hostPort: apps.hostPort,
+      portProtocol: apps.portProtocol,
+      internalPort: apps.internalPort,
+    })
+    .from(apps)
+    .all();
+  for (const row of rows) {
+    if (row.id === excludeId || row.access !== "port" || row.portProtocol !== protocol) continue;
+    const effective = row.hostPort ?? row.internalPort;
+    if (effective !== port) continue;
+    throw new ApiError(
+      409,
+      `Host port ${port}/${protocol} is already published by another app.`,
+      { field: "hostPort" },
+    );
+  }
+}
+
 function toStoredEnv(
   entries: CreateAppInput["envVars"],
   existing: StoredEnvVar[] = [],
@@ -197,14 +224,22 @@ export function validateComposeConfig(
 export function createApp(input: CreateAppInput): AppRow {
   assertUniqueName(input.name);
   const exposed = input.composeServices.filter((service) => service.expose);
-  const primarySubdomain =
+  const access: "http" | "port" | "none" =
     input.sourceType === "compose"
-      ? exposed[0]?.subdomains[0] ?? input.subdomain
-      : input.subdomain;
-  const allSubdomains = [
-    primarySubdomain,
-    ...exposed.flatMap((service) => service.subdomains),
-  ];
+      ? exposed.length > 0
+        ? "http"
+        : "none"
+      : input.access;
+  const primarySubdomain =
+    access !== "http"
+      ? ""
+      : input.sourceType === "compose"
+        ? exposed[0]?.subdomains[0] ?? input.subdomain
+        : input.subdomain;
+  const allSubdomains =
+    access === "http"
+      ? [primarySubdomain, ...exposed.flatMap((service) => service.subdomains)]
+      : [];
   const domain = input.domain?.trim().toLowerCase() || null;
   assertUniqueSubdomains(allSubdomains, domain ?? getBaseDomain());
 
@@ -223,6 +258,8 @@ export function createApp(input: CreateAppInput): AppRow {
     input.sourceType === "compose"
       ? exposed[0]?.internalPort ?? 80
       : (input.internalPort ?? 80);
+  const hostPort = access === "port" ? input.hostPort ?? internalPort : null;
+  if (hostPort !== null) assertHostPortAvailable(hostPort, input.portProtocol);
   db.insert(apps)
     .values({
       id,
@@ -244,6 +281,9 @@ export function createApp(input: CreateAppInput): AppRow {
       composeServices: storedServices,
       deployTarget: input.deployTarget,
       domain,
+      access,
+      hostPort,
+      portProtocol: input.portProtocol,
       internalPort,
       healthPath: input.healthPath,
       envVars: toStoredEnv(input.envVars),
@@ -312,6 +352,9 @@ function deploymentSignature(parts: {
   composePath: string | null;
   deployTarget: string;
   domain: string | null;
+  access: string;
+  hostPort: number | null;
+  portProtocol: string;
   composeServices: {
     name: string;
     expose: boolean;
@@ -367,6 +410,9 @@ function rowSignature(row: AppRow): string {
     composePath: row.composePath,
     deployTarget: row.deployTarget,
     domain: row.domain,
+    access: row.access,
+    hostPort: row.hostPort,
+    portProtocol: row.portProtocol,
     composeServices: storedComposeSignature(row.composeServices),
     internalPort: row.internalPort,
     healthPath: row.healthPath,
@@ -396,21 +442,27 @@ export function updateApp(
     input.domain === undefined
       ? existing.domain
       : input.domain?.trim().toLowerCase() || null;
-  const nextSubdomain =
+  const exposedServices = nextComposeServices.filter((service) => service.expose);
+  const nextAccess: "http" | "port" | "none" =
     nextSourceType === "compose"
-      ? input.subdomain ??
-        nextComposeServices.find((service) => service.expose)?.subdomains[0] ??
-        existing.subdomain
-      : input.subdomain ?? existing.subdomain;
+      ? exposedServices.length > 0
+        ? "http"
+        : "none"
+      : input.access ?? existing.access;
+  const nextSubdomain =
+    nextAccess !== "http"
+      ? ""
+      : nextSourceType === "compose"
+        ? input.subdomain ??
+          exposedServices[0]?.subdomains[0] ??
+          existing.subdomain
+        : input.subdomain ?? existing.subdomain;
 
   assertUniqueName(existing.name, id);
   assertUniqueSubdomains(
-    [
-      nextSubdomain,
-      ...nextComposeServices
-        .filter((service) => service.expose)
-        .flatMap((service) => service.subdomains),
-    ],
+    nextAccess === "http"
+      ? [nextSubdomain, ...exposedServices.flatMap((service) => service.subdomains)]
+      : [],
     nextDomain ?? getBaseDomain(),
     id,
   );
@@ -447,6 +499,15 @@ export function updateApp(
     (nextSourceType === "compose"
       ? nextComposeServices.find((service) => service.expose)?.internalPort ?? existing.internalPort
       : existing.internalPort);
+  const nextPortProtocol = input.portProtocol ?? existing.portProtocol;
+  const nextHostPort =
+    nextAccess === "port"
+      ? input.hostPort ??
+        (existing.access === "port" ? existing.hostPort ?? existing.internalPort : nextPort)
+      : null;
+  if (nextHostPort !== null) {
+    assertHostPortAvailable(nextHostPort, nextPortProtocol, id);
+  }
 
   const validationEnv = (
     input.envVars !== undefined
@@ -475,6 +536,9 @@ export function updateApp(
     buildContext: nextBuildContext ?? undefined,
     repoToken: nextRepoTokenPlain ?? undefined,
     internalPort: nextPort,
+    access: nextAccess,
+    hostPort: nextHostPort ?? undefined,
+    portProtocol: nextPortProtocol,
     healthPath: nextHealthPath,
     envVars: validationEnv,
     volumes: nextVolumes,
@@ -504,6 +568,9 @@ export function updateApp(
     composePath: nextComposePath,
     deployTarget: nextDeployTarget,
     domain: nextDomain,
+    access: nextAccess,
+    hostPort: nextHostPort,
+    portProtocol: nextPortProtocol,
     composeServices: storedComposeSignature(nextComposeServices),
     internalPort: nextPort,
     healthPath: nextHealthPath,
@@ -545,6 +612,9 @@ export function updateApp(
       composeServices: nextComposeServices,
       deployTarget: nextDeployTarget,
       domain: nextDomain,
+      access: nextAccess,
+      hostPort: nextHostPort,
+      portProtocol: nextPortProtocol,
       internalPort: nextPort,
       healthPath: nextHealthPath,
       envVars: nextStoredEnv,
@@ -624,11 +694,14 @@ export function toPublicApp(row: AppRow, baseDomain: string): PublicApp {
     name: row.name,
     subdomain: row.subdomain,
     subdomains: appSubdomains(row),
-    url: appUrl(row.subdomain, effectiveDomain),
+    url: row.subdomain ? appUrl(row.subdomain, effectiveDomain) : "",
     baseDomain: effectiveDomain,
     domain: row.domain,
     defaultDomain: baseDomain,
     sourceType: row.sourceType,
+    access: row.access,
+    hostPort: row.hostPort,
+    portProtocol: row.portProtocol,
     deployTarget: row.deployTarget,
     imageRef: row.imageRef,
     registryUsername: row.registryUsername,

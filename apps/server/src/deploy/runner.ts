@@ -1,5 +1,6 @@
 import type { DeploymentStatus, DeploymentTrigger } from "@launchpad/shared";
 import { buildTraefikLabels } from "@launchpad/shared";
+import { setTimeout as delay } from "node:timers/promises";
 import { config } from "../config";
 import {
   containerIsRunning,
@@ -126,14 +127,16 @@ export async function runDeployment(
     }
 
     const labels = {
-      ...buildTraefikLabels({
-        appId,
-        subdomain: appWithUpdatedConfig.subdomain,
-        baseDomain: appWithUpdatedConfig.domain ?? getBaseDomain(),
-        port: appWithUpdatedConfig.internalPort,
-        healthPath: appWithUpdatedConfig.healthPath,
-        network: config.dockerNetwork,
-      }),
+      ...(appWithUpdatedConfig.access === "http"
+        ? buildTraefikLabels({
+            appId,
+            subdomain: appWithUpdatedConfig.subdomain,
+            baseDomain: appWithUpdatedConfig.domain ?? getBaseDomain(),
+            port: appWithUpdatedConfig.internalPort,
+            healthPath: appWithUpdatedConfig.healthPath,
+            network: config.dockerNetwork,
+          })
+        : {}),
       "launchpad.app": appId,
       "launchpad.deployment": deploymentId,
       "launchpad.managed": "true",
@@ -146,19 +149,39 @@ export async function runDeployment(
       labels,
       network: config.dockerNetwork,
       port: appWithUpdatedConfig.internalPort,
+      hostPort:
+        appWithUpdatedConfig.access === "port"
+          ? appWithUpdatedConfig.hostPort ?? appWithUpdatedConfig.internalPort
+          : null,
+      protocol: appWithUpdatedConfig.portProtocol,
       volumes: appWithUpdatedConfig.volumes,
     });
     log(`Container ${newContainerId.slice(0, 12)} started; waiting for health.`);
 
-    await waitForHealthy({
-      containerId: newContainerId,
-      network: config.dockerNetwork,
-      port: appWithUpdatedConfig.internalPort,
-      path: appWithUpdatedConfig.healthPath,
-      timeoutMs: config.healthTimeoutMs,
-      intervalMs: config.healthIntervalMs,
-      log,
-    });
+    if (appWithUpdatedConfig.access === "http") {
+      await waitForHealthy({
+        containerId: newContainerId,
+        network: config.dockerNetwork,
+        port: appWithUpdatedConfig.internalPort,
+        path: appWithUpdatedConfig.healthPath,
+        timeoutMs: config.healthTimeoutMs,
+        intervalMs: config.healthIntervalMs,
+        log,
+      });
+    } else {
+      // Non-HTTP apps have no request to probe; confirm the process stays up.
+      await delay(1_500);
+      if (!(await containerIsRunning(newContainerId))) {
+        throw new Error(
+          "The container exited right after start. Check the deployment log and the container logs.",
+        );
+      }
+      const target =
+        appWithUpdatedConfig.access === "port"
+          ? `Port ${appWithUpdatedConfig.hostPort ?? appWithUpdatedConfig.internalPort}/${appWithUpdatedConfig.portProtocol} is published on the host.`
+          : "No ingress is configured for this app.";
+      log(`Container is running. ${target}`);
+    }
 
     transition("healthy");
     setAppDeployed(appId, newContainerId, resolved.imageTag);
@@ -177,7 +200,11 @@ export async function runDeployment(
       }
     }
     await cleanupOtherContainers(appId, newContainerId, log);
-    log("Deployment healthy. Traffic is now routed to the new container.");
+    log(
+      appWithUpdatedConfig.access === "http"
+        ? "Deployment healthy. Traffic is now routed to the new container."
+        : "Deployment healthy. The new container is running.",
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`Deployment failed: ${message}`);

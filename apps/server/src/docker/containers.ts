@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import type { ResourceUsage } from "@launchpad/shared";
 import { docker } from "./client";
 
 export interface VolumeMount {
@@ -23,21 +24,29 @@ export interface CreateAppContainerOptions {
   labels: Record<string, string>;
   network: string;
   port: number;
+  /** Publish the internal port on this host port. Null keeps it internal-only. */
+  hostPort?: number | null;
+  protocol?: "tcp" | "udp";
   volumes: VolumeMount[];
 }
 
 export async function createAndStartAppContainer(
   options: CreateAppContainerOptions,
 ): Promise<string> {
+  const protocol = options.protocol ?? "tcp";
+  const portKey = `${options.port}/${protocol}`;
   const container = await docker.createContainer({
     name: options.name,
     Image: options.image,
     Env: Object.entries(options.env).map(([key, value]) => `${key}=${value}`),
     Labels: options.labels,
-    ExposedPorts: { [`${options.port}/tcp`]: {} },
+    ExposedPorts: { [portKey]: {} },
     HostConfig: {
       NetworkMode: options.network,
       RestartPolicy: { Name: "unless-stopped" },
+      ...(options.hostPort
+        ? { PortBindings: { [portKey]: [{ HostPort: String(options.hostPort) }] } }
+        : {}),
       Binds: options.volumes.map(
         (mount) => `${mount.volumeName}:${mount.containerPath}`,
       ),
@@ -162,6 +171,88 @@ export async function waitForHealthy(options: HealthCheckOptions): Promise<void>
   throw new Error(
     `Container did not become healthy within ${Math.round(options.timeoutMs / 1000)}s (${lastError}).`,
   );
+}
+
+interface DockerStatsSample {
+  cpu_stats?: {
+    cpu_usage?: { total_usage?: number; percpu_usage?: number[] };
+    system_cpu_usage?: number;
+    online_cpus?: number;
+  };
+  precpu_stats?: {
+    cpu_usage?: { total_usage?: number; percpu_usage?: number[] };
+    system_cpu_usage?: number;
+    online_cpus?: number;
+  };
+  memory_stats?: {
+    usage?: number;
+    limit?: number;
+    stats?: Record<string, number>;
+  };
+}
+
+function computeContainerUsage(sample: DockerStatsSample): ResourceUsage {
+  const cpu = sample.cpu_stats ?? {};
+  const previous = sample.precpu_stats ?? {};
+  const cpuDelta =
+    (cpu.cpu_usage?.total_usage ?? 0) - (previous.cpu_usage?.total_usage ?? 0);
+  const systemDelta =
+    (cpu.system_cpu_usage ?? 0) - (previous.system_cpu_usage ?? 0);
+  const cores = cpu.online_cpus ?? cpu.cpu_usage?.percpu_usage?.length ?? 1;
+  const cpuPercent =
+    systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * cores * 100 : 0;
+
+  const rawMemory = sample.memory_stats?.usage ?? 0;
+  const stats = sample.memory_stats?.stats ?? {};
+  // cgroup v2 exposes inactive_file, v1 uses total_inactive_file/cache.
+  const cache = stats.inactive_file ?? stats.total_inactive_file ?? stats.cache ?? 0;
+  return {
+    cpuPercent: Math.round(cpuPercent * 100) / 100,
+    memoryBytes: Math.max(0, rawMemory - cache),
+    memoryLimitBytes: sample.memory_stats?.limit ?? 0,
+    containerCount: 1,
+  };
+}
+
+/** One-shot CPU/RAM sample for a single container. */
+export async function containerUsage(containerId: string): Promise<ResourceUsage | null> {
+  try {
+    const sample = await docker.getContainer(containerId).stats({ stream: false });
+    return computeContainerUsage(sample as DockerStatsSample);
+  } catch (error) {
+    if (dockerErrorStatus(error) === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * Sums live usage for one app's containers, or for every Launchpad-managed
+ * container when `appId` is omitted.
+ */
+export async function aggregateContainerUsage(appId?: string): Promise<ResourceUsage> {
+  const containers = await docker.listContainers({
+    all: false,
+    filters: {
+      label: appId ? [`launchpad.app=${appId}`] : ["launchpad.managed=true"],
+    },
+  });
+  const samples = await Promise.all(
+    containers.map((container) => containerUsage(container.Id).catch(() => null)),
+  );
+  const total: ResourceUsage = {
+    cpuPercent: 0,
+    memoryBytes: 0,
+    memoryLimitBytes: 0,
+    containerCount: containers.length,
+  };
+  for (const sample of samples) {
+    if (!sample) continue;
+    total.cpuPercent += sample.cpuPercent;
+    total.memoryBytes += sample.memoryBytes;
+    total.memoryLimitBytes += sample.memoryLimitBytes;
+  }
+  total.cpuPercent = Math.round(total.cpuPercent * 100) / 100;
+  return total;
 }
 
 export function dockerErrorStatus(error: unknown): number | undefined {

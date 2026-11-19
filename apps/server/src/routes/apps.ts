@@ -34,7 +34,9 @@ import {
   listAppContainers,
   removeContainer,
   removeAppVolume,
+  aggregateContainerUsage,
 } from "../docker/containers";
+import { docker } from "../docker/client";
 import { normalizeHostDir, safeUploadName } from "../lib/paths";
 import { sshUploadFile } from "../lib/ssh";
 import { scanCompose } from "../deploy/compose";
@@ -60,6 +62,17 @@ appsRouter.get("/apps", (_req, res) => {
 appsRouter.get("/apps/availability", (req, res) => {
   const query = availabilityQuerySchema.parse(req.query);
   res.json(checkAvailability(query.name, query.subdomain, query.domain));
+});
+
+appsRouter.get("/stats", async (_req, res) => {
+  const [info, usage] = await Promise.all([docker.info(), aggregateContainerUsage()]);
+  res.json({
+    stats: {
+      ...usage,
+      hostCpuCount: info.NCPU ?? 0,
+      hostMemoryBytes: info.MemTotal ?? 0,
+    },
+  });
 });
 
 appsRouter.post("/apps/scan-compose", async (req, res) => {
@@ -111,6 +124,25 @@ function automaticRedeployOptions(app: AppRow): { imageTag?: string; commitSha?:
 appsRouter.get("/apps/:id", (req, res) => {
   const app = requireAppRow(requireParam(req.params, "id"));
   res.json({ app: toPublicApp(app, getBaseDomain()) });
+});
+
+appsRouter.get("/apps/:id/stats", async (req, res) => {
+  const app = requireAppRow(requireParam(req.params, "id"));
+  if (app.deployTarget === "remote") {
+    res.json({
+      stats: {
+        cpuPercent: 0,
+        memoryBytes: 0,
+        memoryLimitBytes: 0,
+        containerCount: 0,
+        available: false,
+        hostCpuCount: 0,
+      },
+    });
+    return;
+  }
+  const [info, usage] = await Promise.all([docker.info(), aggregateContainerUsage(app.id)]);
+  res.json({ stats: { ...usage, available: true, hostCpuCount: info.NCPU ?? 0 } });
 });
 
 const uploadQuerySchema = z.object({
