@@ -22,7 +22,7 @@ import type {
   PublicApp,
 } from "@launchpad/shared";
 import { api, apiJson, errorMessage } from "../lib/api";
-import { formatBytes, formatDateTime, formatRelative, shortId } from "../lib/format";
+import { formatBytes, formatDateTime, formatRelative, hostCpuShare, shortId } from "../lib/format";
 import {
   Button,
   DeploymentBadge,
@@ -368,35 +368,41 @@ export function AppDetailPage() {
             <UsageCard
               icon={<Cpu className="h-3.5 w-3.5" />}
               label="CPU"
-              value={`${statsQuery.data.stats.cpuPercent.toFixed(1)}%`}
+              value={`${hostCpuShare(
+                statsQuery.data.stats.cpuPercent,
+                statsQuery.data.stats.hostCpuCount,
+              ).toFixed(1)}%`}
               detail={`${statsQuery.data.stats.containerCount} container${
                 statsQuery.data.stats.containerCount === 1 ? "" : "s"
-              } · ${statsQuery.data.stats.hostCpuCount} core${
-                statsQuery.data.stats.hostCpuCount === 1 ? "" : "s"
-              }`}
-              percent={
-                statsQuery.data.stats.hostCpuCount > 0
-                  ? (statsQuery.data.stats.cpuPercent /
-                      (statsQuery.data.stats.hostCpuCount * 100)) *
-                    100
-                  : 0
-              }
+              } · ${statsQuery.data.stats.cpuPercent.toFixed(1)}% across ${
+                statsQuery.data.stats.hostCpuCount
+              } core${statsQuery.data.stats.hostCpuCount === 1 ? "" : "s"}`}
+              percent={hostCpuShare(
+                statsQuery.data.stats.cpuPercent,
+                statsQuery.data.stats.hostCpuCount,
+              )}
             />
             <UsageCard
               icon={<MemoryStick className="h-3.5 w-3.5" />}
               label="Memory"
               value={formatBytes(statsQuery.data.stats.memoryBytes)}
               detail={
-                statsQuery.data.stats.memoryLimitBytes > 0
-                  ? `of ${formatBytes(statsQuery.data.stats.memoryLimitBytes)} limit`
-                  : undefined
+                statsQuery.data.stats.hostMemoryBytes > 0
+                  ? `of ${formatBytes(statsQuery.data.stats.hostMemoryBytes)} host memory`
+                  : statsQuery.data.stats.memoryLimitBytes > 0
+                    ? `of ${formatBytes(statsQuery.data.stats.memoryLimitBytes)} limit`
+                    : undefined
               }
               percent={
-                statsQuery.data.stats.memoryLimitBytes > 0
+                statsQuery.data.stats.hostMemoryBytes > 0
                   ? (statsQuery.data.stats.memoryBytes /
-                      statsQuery.data.stats.memoryLimitBytes) *
+                      statsQuery.data.stats.hostMemoryBytes) *
                     100
-                  : 0
+                  : statsQuery.data.stats.memoryLimitBytes > 0
+                    ? (statsQuery.data.stats.memoryBytes /
+                        statsQuery.data.stats.memoryLimitBytes) *
+                      100
+                    : 0
               }
             />
           </div>

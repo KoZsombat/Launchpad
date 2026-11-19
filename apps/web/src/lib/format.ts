@@ -35,6 +35,11 @@ export function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+/** Docker's CPU percent is per core (100% = one core); this is the share of the whole host. */
+export function hostCpuShare(cpuPercent: number, cores: number): number {
+  return cores > 0 ? cpuPercent / cores : cpuPercent;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];

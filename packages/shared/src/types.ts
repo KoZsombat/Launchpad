@@ -203,6 +203,8 @@ export interface AppStats extends ResourceUsage {
   available: boolean;
   /** Cores on the deploy host, so CPU bars can be relative to the whole machine. */
   hostCpuCount: number;
+  /** Total memory on the deploy host, for a host-relative memory bar. */
+  hostMemoryBytes: number;
 }
 
 export interface HostStats extends ResourceUsage {

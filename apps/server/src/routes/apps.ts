@@ -137,12 +137,20 @@ appsRouter.get("/apps/:id/stats", async (req, res) => {
         containerCount: 0,
         available: false,
         hostCpuCount: 0,
+        hostMemoryBytes: 0,
       },
     });
     return;
   }
   const [info, usage] = await Promise.all([docker.info(), aggregateContainerUsage(app.id)]);
-  res.json({ stats: { ...usage, available: true, hostCpuCount: info.NCPU ?? 0 } });
+  res.json({
+    stats: {
+      ...usage,
+      available: true,
+      hostCpuCount: info.NCPU ?? 0,
+      hostMemoryBytes: info.MemTotal ?? 0,
+    },
+  });
 });
 
 const uploadQuerySchema = z.object({

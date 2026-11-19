@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { HostStats, PublicApp } from "@launchpad/shared";
 import { api, apiJson, errorMessage } from "../lib/api";
-import { formatBytes, formatRelative } from "../lib/format";
+import { formatBytes, formatRelative, hostCpuShare } from "../lib/format";
 import {
   DeploymentBadge,
   EmptyState,
@@ -74,15 +74,11 @@ export function DashboardPage() {
           <UsageCard
             icon={<Cpu className="h-3.5 w-3.5" />}
             label="Container CPU"
-            value={`${hostStats.cpuPercent.toFixed(1)}%`}
-            detail={`${hostStats.containerCount} running · ${hostStats.hostCpuCount} host core${
-              hostStats.hostCpuCount === 1 ? "" : "s"
-            }`}
-            percent={
-              hostStats.hostCpuCount > 0
-                ? (hostStats.cpuPercent / (hostStats.hostCpuCount * 100)) * 100
-                : 0
-            }
+            value={`${hostCpuShare(hostStats.cpuPercent, hostStats.hostCpuCount).toFixed(1)}%`}
+            detail={`${hostStats.containerCount} running · ${hostStats.cpuPercent.toFixed(1)}% across ${
+              hostStats.hostCpuCount
+            } core${hostStats.hostCpuCount === 1 ? "" : "s"}`}
+            percent={hostCpuShare(hostStats.cpuPercent, hostStats.hostCpuCount)}
           />
           <UsageCard
             icon={<MemoryStick className="h-3.5 w-3.5" />}
