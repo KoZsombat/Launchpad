@@ -19,6 +19,7 @@ import {
   EmptyState,
   StatusBadge,
   UsageCard,
+  UsageCardSkeleton,
 } from "../components/ui";
 import { cn } from "../components/ui";
 
@@ -69,30 +70,41 @@ export function DashboardPage() {
         </Link>
       </header>
 
-      {hostStats ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <UsageCard
-            icon={<Cpu className="h-3.5 w-3.5" />}
-            label="Container CPU"
-            value={`${hostCpuShare(hostStats.cpuPercent, hostStats.hostCpuCount).toFixed(1)}%`}
-            detail={`${hostStats.containerCount} running · ${hostStats.cpuPercent.toFixed(1)}% across ${
-              hostStats.hostCpuCount
-            } core${hostStats.hostCpuCount === 1 ? "" : "s"}`}
-            percent={hostCpuShare(hostStats.cpuPercent, hostStats.hostCpuCount)}
-          />
-          <UsageCard
-            icon={<MemoryStick className="h-3.5 w-3.5" />}
-            label="Container memory"
-            value={formatBytes(hostStats.memoryBytes)}
-            detail={`of ${formatBytes(hostStats.hostMemoryBytes)} on the host`}
-            percent={
-              hostStats.hostMemoryBytes > 0
-                ? (hostStats.memoryBytes / hostStats.hostMemoryBytes) * 100
-                : 0
-            }
-          />
-        </div>
-      ) : null}
+      <div className="grid gap-3 sm:grid-cols-2">
+        {hostStats ? (
+          <>
+            <UsageCard
+              icon={<Cpu className="h-3.5 w-3.5" />}
+              label="Container CPU"
+              value={`${hostCpuShare(hostStats.cpuPercent, hostStats.hostCpuCount).toFixed(1)}%`}
+              detail={`${hostStats.containerCount} running · ${hostStats.cpuPercent.toFixed(1)}% across ${
+                hostStats.hostCpuCount
+              } core${hostStats.hostCpuCount === 1 ? "" : "s"}`}
+              percent={hostCpuShare(hostStats.cpuPercent, hostStats.hostCpuCount)}
+            />
+            <UsageCard
+              icon={<MemoryStick className="h-3.5 w-3.5" />}
+              label="Container memory"
+              value={formatBytes(hostStats.memoryBytes)}
+              detail={`of ${formatBytes(hostStats.hostMemoryBytes)} on the host`}
+              percent={
+                hostStats.hostMemoryBytes > 0
+                  ? (hostStats.memoryBytes / hostStats.hostMemoryBytes) * 100
+                  : 0
+              }
+            />
+          </>
+        ) : statsQuery.isError ? (
+          <p className="rounded-lg border border-edge bg-panel px-4 py-3 text-xs text-muted sm:col-span-2">
+            Container usage is unavailable: {errorMessage(statsQuery.error)}
+          </p>
+        ) : (
+          <>
+            <UsageCardSkeleton label="Container CPU" />
+            <UsageCardSkeleton label="Container memory" />
+          </>
+        )}
+      </div>
 
       {action.isError ? (
         <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">

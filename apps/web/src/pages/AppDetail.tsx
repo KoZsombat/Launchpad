@@ -31,6 +31,7 @@ import {
   Spinner,
   StatusBadge,
   UsageCard,
+  UsageCardSkeleton,
   cn,
 } from "../components/ui";
 import { ConfigEditor, type AppConfigUpdate } from "../components/ConfigEditor";
@@ -358,7 +359,10 @@ export function AppDetailPage() {
         {statsQuery.isError ? (
           <p className="text-sm text-danger">{errorMessage(statsQuery.error)}</p>
         ) : !statsQuery.data ? (
-          <p className="text-sm text-muted">Loading usage…</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <UsageCardSkeleton label="CPU" />
+            <UsageCardSkeleton label="Memory" />
+          </div>
         ) : !statsQuery.data.stats.available ? (
           <p className="text-sm text-muted">
             Usage is not available for apps deployed to a separate host.

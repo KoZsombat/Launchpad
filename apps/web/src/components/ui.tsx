@@ -336,3 +336,24 @@ export function UsageCard({
     </div>
   );
 }
+
+export function UsageCardSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={`Loading ${label.toLowerCase()}`}
+      className="rounded-lg border border-edge bg-panel px-4 py-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-medium uppercase tracking-widest text-muted">
+          {label}
+        </span>
+        <span className="h-5 w-14 animate-pulse rounded bg-panel-2" />
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-panel-2">
+        <div className="h-full w-1/3 animate-pulse rounded-full bg-edge" />
+      </div>
+      <div className="mt-2 h-3 w-36 animate-pulse rounded bg-panel-2" />
+    </div>
+  );
+}
