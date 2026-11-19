@@ -23,8 +23,17 @@ async function runGit(
   options: { cwd?: string; token?: string | null; log: (line: string) => void },
 ): Promise<string> {
   const token = options.token ?? null;
+  // The checkout under REPOS_DIR may be owned by another UID than the panel process
+  // (image rebuilds, volume restores). Git's dubious-ownership guard rejects `-C <dir>`
+  // before running the command, so scope safe.directory to exactly that checkout.
+  const targetIndex = args.indexOf("-C");
+  const targetDir = targetIndex >= 0 ? args[targetIndex + 1] : options.cwd;
+  const finalArgs = targetDir
+    ? ["-c", `safe.directory=${path.resolve(targetDir)}`, ...args]
+    : args;
+
   try {
-    const { stdout, stderr } = await execFileAsync("git", args, {
+    const { stdout, stderr } = await execFileAsync("git", finalArgs, {
       cwd: options.cwd,
       maxBuffer: 32 * 1024 * 1024,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
