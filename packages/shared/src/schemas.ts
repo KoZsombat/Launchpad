@@ -10,6 +10,20 @@ export const DEPLOY_TARGETS = ["local", "remote"] as const;
 export const deployTargetSchema = z.enum(DEPLOY_TARGETS);
 export type DeployTarget = (typeof DEPLOY_TARGETS)[number];
 
+/**
+ * How an app is reached from outside Docker.
+ * - `http`: Traefik route on the app's subdomain.
+ * - `port`: publish a container port on the host (TCP or UDP).
+ * - `none`: no ingress (workers, cron jobs, one-off services).
+ */
+export const APP_ACCESS_MODES = ["http", "port", "none"] as const;
+export const appAccessSchema = z.enum(APP_ACCESS_MODES);
+export type AppAccess = (typeof APP_ACCESS_MODES)[number];
+
+export const PORT_PROTOCOLS = ["tcp", "udp"] as const;
+export const portProtocolSchema = z.enum(PORT_PROTOCOLS);
+export type PortProtocol = (typeof PORT_PROTOCOLS)[number];
+
 const optionalText = (max: number) => z.string().trim().max(max).optional();
 
 export const envVarSchema = z.object({
@@ -152,6 +166,14 @@ const appConfigObject = z.object({
   buildContext: optionalText(255),
   repoToken: z.string().max(4096).optional(),
   internalPort: portSchema.optional(),
+  /**
+   * Ingress mode. Compose projects derive this from their published services,
+   * so the field is accepted for single-container sources only.
+   */
+  access: appAccessSchema.default("http"),
+  /** Host port published when `access` is `port`; defaults to the internal port. */
+  hostPort: portSchema.optional(),
+  portProtocol: portProtocolSchema.default("tcp"),
   healthPath: healthPathSchema,
   envVars: z.array(envVarSchema).max(100).default([]),
   volumes: z.array(volumeSchema).max(20).default([]),
@@ -298,7 +320,6 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
     }
     const serviceNames = new Set<string>();
     const subdomainOwner = new Map<string, string>();
-    let exposedCount = 0;
     config.composeServices.forEach((service, index) => {
       if (serviceNames.has(service.name)) {
         ctx.addIssue({
@@ -310,7 +331,6 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
       serviceNames.add(service.name);
 
       if (service.expose) {
-        exposedCount += 1;
         if (service.subdomains.length === 0) {
           ctx.addIssue({
             code: "custom",
@@ -355,13 +375,6 @@ function validateConfig(config: AppConfig, ctx: z.RefinementCtx): void {
         envKeys.add(entry.key);
       });
     });
-    if (config.composeServices.length > 0 && exposedCount === 0) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["composeServices"],
-        message: "Publish at least one service through Traefik.",
-      });
-    }
   }
 
   if (config.cicdEnabled && config.sourceType !== "github") {
@@ -403,14 +416,44 @@ export const appConfigSchema = appConfigObject.superRefine(validateConfig);
 export const createAppSchema = appConfigObject
   .extend({
     name: slugSchema,
-    subdomain: subdomainSchema,
+    /** Empty for apps without an HTTP route. */
+    subdomain: z.string().trim().max(63, "Subdomain must be 63 characters or fewer."),
   })
   .superRefine((config, ctx) => {
     validateConfig(config, ctx);
-    if (config.sourceType !== "compose") return;
-    const exposed = config.composeServices
-      .filter((service) => service.expose)
-      .flatMap((service) => service.subdomains);
+    const exposed =
+      config.sourceType === "compose"
+        ? config.composeServices
+            .filter((service) => service.expose)
+            .flatMap((service) => service.subdomains)
+        : null;
+    const wantsHttp =
+      config.sourceType === "compose" ? Boolean(exposed?.length) : config.access === "http";
+    if (wantsHttp) {
+      if (!config.subdomain) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["subdomain"],
+          message: "Subdomain is required for HTTP apps.",
+        });
+      } else {
+        const parsed = subdomainSchema.safeParse(config.subdomain);
+        if (!parsed.success) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["subdomain"],
+            message: parsed.error.issues[0]?.message ?? "Invalid subdomain.",
+          });
+        }
+      }
+    } else if (config.subdomain) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["subdomain"],
+        message: "Leave the subdomain empty when the app has no HTTP route.",
+      });
+    }
+    if (exposed === null) return;
     if (exposed.length > 0 && !exposed.includes(config.subdomain)) {
       ctx.addIssue({
         code: "custom",
@@ -442,6 +485,8 @@ export const updateAppSchema = z
     cicdEnabled: z.boolean(),
     subdomain: subdomainSchema,
     deployTarget: deployTargetSchema,
+    access: appAccessSchema.optional(),
+    portProtocol: portProtocolSchema.optional(),
     composeServices: z.array(composeServiceSchema).max(50),
   })
   .partial()

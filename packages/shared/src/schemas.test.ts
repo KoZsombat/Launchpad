@@ -117,6 +117,29 @@ describe("createAppSchema", () => {
   });
 });
 
+describe("non-HTTP apps", () => {
+  it("accepts a background container without a subdomain", () => {
+    expect(createAppSchema.safeParse({ ...imageApp, subdomain: "", access: "none" }).success).toBe(
+      true,
+    );
+  });
+
+  it("accepts a published UDP port", () => {
+    const parsed = createAppSchema.safeParse({
+      ...imageApp,
+      subdomain: "",
+      access: "port",
+      hostPort: 19_132,
+      portProtocol: "udp",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a subdomain when the app has no HTTP route", () => {
+    expect(createAppSchema.safeParse({ ...imageApp, access: "none" }).success).toBe(false);
+  });
+});
+
 describe("domainSchema", () => {
   it("accepts real domains and localhost", () => {
     expect(domainSchema.safeParse("example.com").success).toBe(true);
@@ -224,6 +247,19 @@ describe("compose projects", () => {
       ],
     });
     expect(parsed.success).toBe(false);
+  });
+
+  it("accepts a compose project without published services", () => {
+    const parsed = createAppSchema.safeParse({
+      ...composeApp,
+      subdomain: "",
+      composeServices: composeApp.composeServices.map((service) => ({
+        ...service,
+        expose: false,
+        subdomains: [],
+      })),
+    });
+    expect(parsed.success).toBe(true);
   });
 
   it("requires a compose file or a repository", () => {

@@ -1,5 +1,10 @@
 import type { DeploymentStatus } from "./state";
-import type { DeployTarget, SourceType } from "./schemas";
+import type {
+  AppAccess,
+  DeployTarget,
+  PortProtocol,
+  SourceType,
+} from "./schemas";
 
 export type AppStatus = "running" | "stopped" | "failed";
 export type DeploymentTrigger = "manual" | "webhook" | "github-push";
@@ -57,6 +62,11 @@ export interface PublicApp {
   /** Panel-wide default domain. */
   defaultDomain: string;
   sourceType: SourceType;
+  /** How the app is reached: Traefik route, published host port, or no ingress. */
+  access: AppAccess;
+  /** Host port published on the deploy host when `access` is `port`. */
+  hostPort: number | null;
+  portProtocol: PortProtocol;
   deployTarget: DeployTarget;
   imageRef: string | null;
   registryUsername: string | null;
@@ -177,4 +187,25 @@ export interface ScanComposeResponse {
   compose: string;
   composePath: string | null;
   scan: ComposeScan;
+}
+
+/** Live usage of the containers that belong to one app (or the whole host). */
+export interface ResourceUsage {
+  /** Sum of per-container CPU percentages; 100% is one full core. */
+  cpuPercent: number;
+  memoryBytes: number;
+  memoryLimitBytes: number;
+  containerCount: number;
+}
+
+export interface AppStats extends ResourceUsage {
+  /** Remote targets run on another host, so their stats are not visible here. */
+  available: boolean;
+  /** Cores on the deploy host, so CPU bars can be relative to the whole machine. */
+  hostCpuCount: number;
+}
+
+export interface HostStats extends ResourceUsage {
+  hostCpuCount: number;
+  hostMemoryBytes: number;
 }
