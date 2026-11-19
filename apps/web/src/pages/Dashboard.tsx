@@ -36,7 +36,7 @@ export function DashboardPage() {
   const statsQuery = useQuery({
     queryKey: ["host-stats"],
     queryFn: () => api<{ stats: HostStats }>("/api/stats"),
-    refetchInterval: 10_000,
+    refetchInterval: 1_000,
   });
 
   const action = useMutation({

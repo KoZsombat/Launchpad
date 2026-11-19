@@ -89,7 +89,7 @@ export function AppDetailPage() {
     queryKey: ["app-stats", appId],
     queryFn: () => api<{ stats: AppStats }>(`/api/apps/${appId}/stats`),
     enabled: Boolean(appId),
-    refetchInterval: 5_000,
+    refetchInterval: 1_000,
   });
 
   const action = useMutation({
