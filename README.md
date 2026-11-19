@@ -230,6 +230,18 @@ Databases and queues (Postgres, MySQL, Redis, MongoDB, RabbitMQ, Kafka, …) are
 
 If a GitHub repository you are adding contains a compose file, use the **Use docker-compose** shortcut on the GitHub source tab: it switches to the compose flow with the repository and branch prefilled and scans the repo.
 
+## 6c. Non-web apps, published ports and resource usage
+
+Single-container apps choose an **App type** when they are created:
+
+- **Web app** — Traefik route on one or more subdomains, with an HTTP health path.
+- **Published port** — publishes the container port on the deploy host over TCP or UDP. No subdomain or Traefik route; open the port in the host firewall and any NAT in front of it. Useful for game servers, MQTT, databases you want to reach directly, etc.
+- **Background** — no ingress at all. Discord bots, workers, cron jobs, queues and internal-only databases run here and are reached by other apps over the shared Docker network.
+
+Compose projects follow the same rule: publish at least one service to get HTTP routes, or leave every service unpublished to run a stack with no ingress. Non-HTTP apps skip the HTTP health check; the deployment succeeds once the container stays running. Named volumes, env vars, image/GitHub sources and the per-app SSH terminal all work the same way.
+
+The app page shows live CPU and memory for that app's containers (Docker stats API) and the dashboard shows the totals for every Launchpad-managed container on the host. Remote deploy targets run on another machine, so the panel cannot sample them and reports usage as unavailable.
+
 ## 7. Set up CI/CD with GitHub Actions
 
 Prerequisites: a GitHub source app and a GitHub token stored in **Settings → GitHub** (classic PAT with `repo` scope; needed to commit the workflow file).
@@ -275,6 +287,8 @@ SSH is optional. Projects deployed with the **local** target use the Docker sock
 1. Ensure `sshd` runs on the VM (for the terminal) and/or on the remote host (for remote projects), and you know a username plus password or an unencrypted private key.
 2. In **Settings → Remote hosts & web SSH terminal** set host `host.docker.internal` (compose maps it to the VM gateway) or the VM's LAN IP, the SSH port (usually 22), the username and the auth method.
 3. Use the **GUI / CLI** switch in the sidebar (or `Ctrl + \``) to move between the dashboard and the terminal.
+
+On phones and tablets the terminal shows a touch key bar above the on-screen keyboard: `Esc`, `Tab`, arrows, `Home`/`End`, `PgUp`/`PgDn`, `Ins`/`Del`, paste, and the usual control keys (`^C`, `^D`, `^Z`, `^L`, `^O`, `^X`, `^W`, `^K`, `^U`, `^R`). Arm **Ctrl** and type any letter to send that control code, which covers the rest of nano's shortcuts (for example Ctrl+O to write out and Ctrl+X to exit). The terminal resizes with the on-screen keyboard.
 
 The connection originates inside the panel container on the `web` network. The SSH host key is currently accepted without pinning; restrict the panel's network exposure and rely on Cloudflare Access.
 
